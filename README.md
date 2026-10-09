@@ -8,6 +8,8 @@
 - **Phase 2（进行中）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
   （已落地：建库地基 + 采集子系统骨架，**默认全关**）+ raw 出口（`trade_calendar` 已可读）
   + 逐数据集灰度切换。calendar 灰度切换随后续 PR。
+- **Phase 3（进行中）**：raw 出口逐数据集增补（`stock_basic` 已注册，采集放闸 + 首灌 + 对账
+  后供 steady 读切换），随后 `index/valuation/finance/daily`。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -44,11 +46,12 @@
 
 > 列名照 collector `hotspot.py` 实际输出**逐字冻结**。
 
-### Phase 2 raw 数据集（读自有库）
+### Phase 2/3 raw 数据集（读自有库）
 
 | id | kind | 参数 | 列 | TTL |
 |---|---|---|---|---|
 | `trade_calendar` | raw | `start`,`end`(YYYY-MM-DD), `is_open`(bool,默认 true) | cal_date, is_open, exchange | 不缓存 |
+| `stock_basic` | raw | `codes`,`market`,`universe`,`scope`(逗号 IN), `industry`, `keyword`(模糊), `sort`(code/name/list_date/market/industry), `order`(asc/desc), `limit`,`offset` | code, name, market, industry, list_date, status, universe, data_scope | 不缓存 |
 
 - **raw 语义**（与 external 相区别）：① **不受** `DATAHUB_EXT_*` 闸门约束（读自有库，
   不发外部请求）；② **不缓存**（`ttl_seconds=None`）——本地库权威且廉价，无 stale 兜底；

@@ -1,7 +1,9 @@
-"""Phase 2 数据集定义（raw：读 datahub 自有库，`source="db"`）。
+"""Phase 2/3 数据集定义（raw：读 datahub 自有库，`source="db"`）。
 
 列名/参数**照 `steady/docs/phase2/design/数据接入层-datahub.md` §2.2 冻结**
-（`trade_calendar`：params `start`,`end`,`is_open`；列 `cal_date,is_open,exchange`）。
+（`trade_calendar`：params `start`,`end`,`is_open`；列 `cal_date,is_open,exchange`；
+`stock_basic`：params `codes/market/industry/universe/scope/keyword/sort/order/limit/offset`；
+列 `code,name,market,industry,list_date,status,universe,data_scope`）。
 
 与 external 数据集的差别（服务层 `service.get_dataset` 按 `kind` 分派）：
 - raw **不受** `DATAHUB_EXT_*` 外部采集闸门约束（读自有库，不发外部请求）；
@@ -30,7 +32,46 @@ TRADE_CALENDAR = DatasetSpec(
     desc="读自有库 trade_calendar（采集落库结果）；本地权威，不缓存。",
 )
 
-# Phase 2 数据集全集（顺序即对外列出的顺序）
+# stock_basic：股票列表 + 采集域/选股域标记（Phase 3 逐集全迁移首个数据集）
+STOCK_BASIC = DatasetSpec(
+    id="stock_basic",
+    title="股票基本信息",
+    kind="raw",
+    params=(
+        ParamSpec(name="codes", type="str",
+                  desc="代码白名单，逗号分隔（如 000001,600000）；空=不限"),
+        ParamSpec(name="market", type="str",
+                  desc="市场白名单，逗号分隔（SH/SZ/BJ）；空=不限"),
+        ParamSpec(name="industry", type="str", desc="行业精确匹配"),
+        ParamSpec(name="universe", type="str",
+                  desc="策略选股域，逗号分隔（hs300/zz500）；空=不限"),
+        ParamSpec(name="scope", type="str",
+                  desc="采集域，逗号分隔（a_share）；空=不限"),
+        ParamSpec(name="keyword", type="str", desc="代码/名称模糊匹配（不区分大小写）"),
+        ParamSpec(name="sort", type="enum",
+                  enum=("code", "name", "list_date", "market", "industry"),
+                  default="code", desc="排序键（非法值→code）"),
+        ParamSpec(name="order", type="enum", enum=("asc", "desc"),
+                  default="asc", desc="排序方向"),
+        ParamSpec(name="limit", type="int", desc="最多返回行数；空=不限"),
+        ParamSpec(name="offset", type="int", desc="跳过行数（分页用）"),
+    ),
+    columns=(
+        ColumnSpec("code", "str", desc="股票代码（6 位）"),
+        ColumnSpec("name", "str", desc="名称"),
+        ColumnSpec("market", "str", desc="市场：SH/SZ/BJ"),
+        ColumnSpec("industry", "str", desc="行业（证监会/东财分类）"),
+        ColumnSpec("list_date", "date", desc="上市日期"),
+        ColumnSpec("status", "str", desc="状态：L=上市 / D=退市"),
+        ColumnSpec("universe", "str", desc="策略选股域：hs300/zz500（空=全市场）"),
+        ColumnSpec("data_scope", "str", desc="采集域：a_share / 空（与 universe 正交）"),
+    ),
+    ttl_seconds=None,          # 本地库读取：不缓存
+    source="db",
+    desc="读自有库 stock_basic（采集落库结果）；本地权威，不缓存。",
+)
+
 RAW_DATASETS: tuple[DatasetSpec, ...] = (
     TRADE_CALENDAR,
+    STOCK_BASIC,
 )
