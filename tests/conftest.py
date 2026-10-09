@@ -27,9 +27,12 @@ def _clean_state():
 
 @pytest.fixture(autouse=True)
 def _allow_test_host(monkeypatch):
-    """TestClient 的 Host 头是 'testserver' —— MCP DNS-rebinding 白名单须放行。"""
+    """TestClient 的 Host 头是 'testserver' —— MCP DNS-rebinding 白名单须放行。
+
+    带 ':*' 通配，镜像出厂默认（真实客户端 Host 必带端口，见 app/config.py）。"""
     monkeypatch.setattr(config, "MCP_ALLOWED_HOSTS",
-                        ["localhost", "127.0.0.1", "testserver"])
+                        ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*",
+                         "testserver", "testserver:*"])
 
 
 @pytest.fixture

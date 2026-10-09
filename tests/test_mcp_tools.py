@@ -61,3 +61,29 @@ def test_mcp_initialize_over_http():
         assert r.status_code == 200
         body = r.text
         assert "datahub" in body            # serverInfo 名
+
+
+def test_mcp_initialize_allows_host_with_port():
+    """回归：真实客户端 Host 头**带端口**（http://127.0.0.1:8100/mcp）——
+    白名单须以 'host:*' 通配匹配，否则一律 421（DNS-rebinding 误杀全客户端）。
+    曾因默认白名单无 ':*'，本地翻闸冒烟时 MCP 客户端全线 421。"""
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "t", "version": "1"}},
+    }
+    headers = {"Accept": "application/json, text/event-stream",
+               "Content-Type": "application/json"}
+    # base_url 带端口 → TestClient 发出 Host: testserver:8100
+    with TestClient(build_app(), base_url="http://testserver:8100") as client:
+        r = client.post("/mcp", json=payload, headers=headers)
+        assert r.status_code == 200, f"带端口 Host 应放行，实得 {r.status_code}"
+
+
+def test_default_allowed_hosts_covers_ports():
+    """出厂默认必须含 ':*' 通配——否则部署后所有带端口的真实 MCP 客户端 421。"""
+    from app.config import _DEFAULT_MCP_ALLOWED_HOSTS
+
+    parts = [p.strip() for p in _DEFAULT_MCP_ALLOWED_HOSTS.split(",")]
+    assert "127.0.0.1:*" in parts
+    assert "localhost:*" in parts

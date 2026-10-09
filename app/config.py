@@ -39,7 +39,12 @@ TOKEN = _str("DATAHUB_TOKEN", "")
 
 # MCP Streamable HTTP 的 DNS-rebinding 允许 Host 列表（默认本机）。
 # 跨机暴露时按部署拓扑加 Host（如 LAN IP/域名）；此即防 rebinding 的白名单。
-MCP_ALLOWED_HOSTS = _list("DATAHUB_MCP_ALLOWED_HOSTS", "localhost,127.0.0.1")
+# 关键：真实客户端的 Host 头**带端口**（http://127.0.0.1:8100/mcp）。MCP SDK 的
+# 校验只做「精确匹配」或「'host:*' 通配」（见 mcp/server/transport_security.py
+# `_validate_host`），故默认必须带 ':*'——否则带端口的 Host 一律 421，
+# 误杀所有真实 MCP 客户端（仅无端口的测试 Host 能过）。
+_DEFAULT_MCP_ALLOWED_HOSTS = "localhost,localhost:*,127.0.0.1,127.0.0.1:*"
+MCP_ALLOWED_HOSTS = _list("DATAHUB_MCP_ALLOWED_HOSTS", _DEFAULT_MCP_ALLOWED_HOSTS)
 
 # ---------- 请求层超时（沿用 collector 口径）----------
 HTTP_CONNECT_TIMEOUT = _float("DATAHUB_HTTP_CONNECT_TIMEOUT", 5)

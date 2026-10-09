@@ -23,6 +23,9 @@
   `meta` 含 `stale`/`cached`/`rows`。
 - **MCP**：每个数据集一个 tool（`hotspot.indices` → `hotspot_indices`）+ `list_datasets`；
   tool 的 `inputSchema` 由数据集 params 机械生成。
+- **MCP Host 白名单**：`DATAHUB_MCP_ALLOWED_HOSTS` 须带 `:*`（默认
+  `localhost,localhost:*,127.0.0.1,127.0.0.1:*`）——真实客户端 Host 头含端口，SDK 只认
+  `host:*` 通配，漏配会一律 **421**（DNS-rebinding 误杀）。跨机暴露时按拓扑追加。
 - 两出口共享内核 `service.get_dataset`（**零逻辑重复**）。
 
 ### Phase 1 数据集
