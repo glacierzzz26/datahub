@@ -36,8 +36,17 @@
 | `industry.catalog` | — | name, code, change_pct | 86400s |
 | `industry.members` | `industry`(必) | code, name | 86400s |
 
-> 列名照 collector `hotspot.py` 实际输出**逐字冻结**；`industry.*` 首源（东财行业板块）
-> 需在目标环境**实测可用性**后冻结（蓝图 §13.2）。
+> 列名照 collector `hotspot.py` 实际输出**逐字冻结**。
+
+### 数据源现状（2026-10-09 实测冻结）
+
+- **东财 board 接口在目标环境稳定不可达**（`RemoteDisconnected`），故 `industry.catalog`
+  首源取**同花顺**（`stock_board_industry_name_ths` + `stock_board_industry_summary_ths`），
+  东财兜底。
+- `industry.members` 只有东财 `stock_board_industry_cons_em`（akshare 唯一成分接口），
+  无同花顺替代 → **不可达时返回 503**（已知实现受限，非代码缺陷；翻闸前须确认该源可达）。
+- **空结果即失败**：数据集整体取空（全源失败）→ 抛错，服务层转 **stale**（有旧值）或
+  **503**，**绝不静默返回空数组**（蓝图 §5 / §11）。
 
 ---
 

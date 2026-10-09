@@ -264,14 +264,24 @@ def _fetch_hot_stocks(spot_date: date, top: int) -> list[dict]:
 # ---------- 数据集分发 ----------
 
 def fetch(dataset_id: str, params: dict) -> list[dict]:
-    """按数据集 id 分发到对应取数函数（供 providers/registry 调用）。"""
+    """按数据集 id 分发到对应取数函数（供 providers/registry 调用）。
+
+    **空结果即失败**：各分项内部对单源失败降级/吞异常，落到整体为空只可能是
+    全源失败——此时抛异常，由服务层转 stale（有旧值）或 503，**绝不静默返回空数组**
+    （Phase 1 蓝图 §5 / §11）。部分成功返回部分（增强数据可降级），不抛。
+    """
     top = int(params.get("top") or config.HOTSPOT_TOP_N)
     if dataset_id == "hotspot.indices":
-        return _fetch_indices()
-    if dataset_id == "hotspot.sectors_gain":
-        return _sectors_gain_from(_fetch_ths_sectors(), top)
-    if dataset_id == "hotspot.sectors_flow":
-        return _sectors_flow_from(_fetch_ths_sectors(), top)
-    if dataset_id == "hotspot.hot_stocks":
-        return _fetch_hot_stocks(date.today(), top)
-    raise ValueError(f"akshare_hotspot 不支持的数据集: {dataset_id}")
+        rows = _fetch_indices()
+    elif dataset_id == "hotspot.sectors_gain":
+        rows = _sectors_gain_from(_fetch_ths_sectors(), top)
+    elif dataset_id == "hotspot.sectors_flow":
+        rows = _sectors_flow_from(_fetch_ths_sectors(), top)
+    elif dataset_id == "hotspot.hot_stocks":
+        rows = _fetch_hot_stocks(date.today(), top)
+    else:
+        raise ValueError(f"akshare_hotspot 不支持的数据集: {dataset_id}")
+    if not rows:
+        raise RuntimeError(f"{dataset_id} 源返回空（疑似全源失败/不可达）")
+    return rows
+
