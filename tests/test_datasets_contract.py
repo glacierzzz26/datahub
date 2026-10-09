@@ -4,17 +4,19 @@ import pytest
 
 from app.datasets import registry
 from app.datasets.external import EXTERNAL_DATASETS
+from app.datasets.raw import RAW_DATASETS
 from app.providers.ext import akshare_hotspot, akshare_industry
 
+_ALL_DATASETS = EXTERNAL_DATASETS + RAW_DATASETS
 _ALLOWED_TYPES = {"str", "int", "float", "bool", "date"}
 
 
 def test_registry_keys_match_ids():
-    assert set(registry.DATASET_REGISTRY) == {d.id for d in EXTERNAL_DATASETS}
+    assert set(registry.DATASET_REGISTRY) == {d.id for d in _ALL_DATASETS}
 
 
 def test_every_dataset_self_consistent():
-    for d in EXTERNAL_DATASETS:
+    for d in _ALL_DATASETS:
         assert d.id and d.title and d.kind in ("external", "raw")
         assert d.source, f"{d.id} 缺 source"
         assert d.columns, f"{d.id} 无列定义"
@@ -30,7 +32,7 @@ def test_every_dataset_self_consistent():
 
 
 def test_every_dataset_has_source_chain():
-    for d in EXTERNAL_DATASETS:
+    for d in _ALL_DATASETS:
         assert registry.source_chain(d.id), f"{d.id} 无源链"
 
 

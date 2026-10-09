@@ -6,8 +6,8 @@
 - **本阶段（Phase 1）**：一个独立服务、**不建自有库**（按需抓 + 缓存）、
   **steady 零改动**（两条线并行、互不依赖）。
 - **Phase 2（进行中）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
-  （已落地：建库地基 + 采集子系统骨架，**默认全关**）+ 逐数据集灰度切换。raw 出口与
-  calendar 切换随后续 PR。
+  （已落地：建库地基 + 采集子系统骨架，**默认全关**）+ raw 出口（`trade_calendar` 已可读）
+  + 逐数据集灰度切换。calendar 灰度切换随后续 PR。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -43,6 +43,20 @@
 | `industry.members` | `industry`(必) | code, name | 86400s |
 
 > 列名照 collector `hotspot.py` 实际输出**逐字冻结**。
+
+### Phase 2 raw 数据集（读自有库）
+
+| id | kind | 参数 | 列 | TTL |
+|---|---|---|---|---|
+| `trade_calendar` | raw | `start`,`end`(YYYY-MM-DD), `is_open`(bool,默认 true) | cal_date, is_open, exchange | 不缓存 |
+
+- **raw 语义**（与 external 相区别）：① **不受** `DATAHUB_EXT_*` 闸门约束（读自有库，
+  不发外部请求）；② **不缓存**（`ttl_seconds=None`）——本地库权威且廉价，无 stale 兜底；
+  ③ **空结果是合法值**（库内确无 = 尚未采集），**不**转 503——这是 external「空即失败」
+  的反例。
+- 由 `providers/db.py`（`name="db"`）实现；HTTP `/v1/datasets` 与 MCP tool
+  （`trade_calendar`）按注册表**机械自动出现**。`is_open` 默认 true → 只返回交易日；
+  传 `is_open=false` 返回全部日历日。
 
 ### 数据源现状（2026-10-09 实测冻结）
 
@@ -191,9 +205,9 @@ app/
 ├── http_api.py        # /v1/... 路由
 ├── mcp_facade.py      # FastMCP 实例 + 由注册表生成 tools
 ├── server.py          # 入口：装配 FastAPI + 挂载 MCP + /healthz
-├── datasets/          # spec / registry / external（Phase 1 数据集）
+├── datasets/          # spec / registry / external（Phase 1）/ raw（Phase 2 读库）
 ├── models/            # ORM（tables.py，仅原始表子集；对齐 init.sql）
-├── providers/         # base（with_timeout）/ net（超时补丁）/ registry / ext（取数）
+├── providers/         # base（with_timeout）/ net / registry / ext（取数）/ db（读库）
 ├── tasks.py           # [Phase 2] 采集调度入口（python -m app.tasks）+ 采集闸门（注册层/调用层）
 ├── watchdog.py        # [Phase 2] 任务级看门狗（卡死自愈 + 补跑）
 ├── cli.py             # [Phase 2] 采集手动入口（python -m app.cli，受采集闸门约束）

@@ -5,6 +5,7 @@ HTTP 与 MCP 两个出口都调本函数 —— **出口层零业务逻辑**。
 """
 import json
 import logging
+from datetime import date
 
 from app import config
 from app.cache import TTLCache
@@ -54,7 +55,14 @@ def normalize_params(spec, raw: dict) -> dict:
                 raise BadParams(f"参数 {p.name} 需为整数") from None
         elif p.type == "bool":
             out[p.name] = str(val).strip().lower() in ("1", "true", "yes", "on")
-        else:  # str / code / date / enum
+        elif p.type == "date":
+            s = str(val).strip()
+            try:
+                date.fromisoformat(s)
+            except ValueError:
+                raise BadParams(f"参数 {p.name} 需为 YYYY-MM-DD") from None
+            out[p.name] = s
+        else:  # str / code / enum
             out[p.name] = str(val)
         if p.enum and out[p.name] not in p.enum:
             raise BadParams(f"参数 {p.name} 取值须为 {p.enum}")
@@ -102,7 +110,13 @@ def get_dataset(dataset_id: str, params: dict) -> tuple[list[dict], dict]:
         raise UnknownDataset(dataset_id)
     nparams = normalize_params(spec, params)
 
-    # 闸门在缓存之前：未翻闸 → 零外部请求、直接 503
+    # raw（读自有库）：不受外部采集闸门约束，不缓存、无 stale 兜底——
+    # 本地库权威且廉价；**空结果合法**（库内确无 = 尚未采集），不转 503。
+    if spec.kind == "raw":
+        rows = _fetch_from_chain(spec, nparams)
+        return rows, {"stale": False, "cached": False, "rows": len(rows)}
+
+    # 闸门在缓存之前：external 未翻闸 → 零外部请求、直接 503
     if not config.ext_enabled(spec.id):
         raise DatasetUnavailable(f"{spec.id} 未翻闸（DATAHUB_EXT_ENABLED × DATAHUB_EXT_DATASETS）")
 
