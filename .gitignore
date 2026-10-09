@@ -17,3 +17,6 @@ venv/
 # 其它
 .pytest_cache/
 .ruff_cache/
+
+# 采集看门狗运行目录（compose 挂载；退出计数/日志）
+logs/

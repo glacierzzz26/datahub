@@ -44,13 +44,47 @@ def auth_token(monkeypatch):
 
 @pytest.fixture
 def enable_all_ext(monkeypatch):
-    """翻闸：启用全部 external 数据集（否则一律 503）。"""
+    """翻闸：启用全部 external 数据集（否则一律 503）。
+
+    仅 `kind=="external"`——raw 数据集（Phase 2）不走 ext 闸门。
+    """
     from app.datasets import registry
 
-    ids = [s.id for s in registry.all_datasets()]
+    ids = [s.id for s in registry.all_datasets() if s.kind == "external"]
     monkeypatch.setattr(config, "EXT_ENABLED", True)
     monkeypatch.setattr(config, "EXT_DATASETS", ids)
     return ids
+
+
+@pytest.fixture
+def bare_requests():
+    """安装请求层超时补丁，用例结束后**必定**卸载（搬自 collector/tests/conftest.py）。
+
+    `bare` 取「裸 requests」义：打补丁后裸 `requests.get(url)` 才受超时保护。
+    """
+    from app.providers.net import install_http_timeouts, uninstall_http_timeouts
+
+    installed = install_http_timeouts()
+    try:
+        yield installed
+    finally:
+        uninstall_http_timeouts()
+
+
+@pytest.fixture
+def reset_leak_counter():
+    """把 with_timeout 的泄漏计数归零（用例结束后恢复为 0）。
+
+    计数是模块级全局，会被任一强制超时的用例推高。断言计数的用例必须用本 fixture，
+    否则执行顺序一变就飘。
+    """
+    from app.collectors import base
+
+    with base._leak_lock:
+        base._leaked_workers = 0
+    yield
+    with base._leak_lock:
+        base._leaked_workers = 0
 
 
 @pytest.fixture
