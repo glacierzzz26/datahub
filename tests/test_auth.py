@@ -26,13 +26,16 @@ def test_datasets_wrong_token_401(auth_token):
 
 
 def test_datasets_ok_with_token(auth_token):
+    from app.datasets import registry
+
     r = _client().get("/v1/datasets", headers={"Authorization": f"Bearer {auth_token}"})
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == 0
     ids = [d["id"] for d in body["data"]]
-    assert "hotspot.indices" in ids
-    assert len(ids) == 6
+    assert "hotspot.indices" in ids          # external（Phase 1）
+    assert "trade_calendar" in ids           # raw（Phase 2）
+    assert ids == [s.id for s in registry.all_datasets()]
 
 
 def test_token_not_configured_fails_closed(monkeypatch):
