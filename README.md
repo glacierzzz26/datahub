@@ -136,6 +136,10 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   `CREATE DATABASE datahub` + 施加 `init.sql`。
 - **迁移**（幂等）：`./scripts/migrate.sh` 应用 `deploy/migrations/*.sql`（`schema_migrations` 台账）；
   `./scripts/migrate.sh --check` 仅报告列漂移。
+- **calendar 对账**（切换放行门）：`python scripts/reconcile_calendar.py [--limit 60]`
+  ——开**两个引擎**（`DB_*`=datahub、`STEADY_DB_*`=steady，未设项回退 `DB_*`）分取最近
+  N 行，按 `cal_date` 逐位分类（`accepted`/`drifted`/`db_anomaly`/`false_pos`/`rejected`）；
+  有非 `accepted` → 退出码 1（`--allow-drift` 仅报告）。历史拉取不占当日采集窗。
 - **DB 环境变量**：`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（默认库名 `datahub`）。
   容器内 `DB_HOST=host.docker.internal`（compose `extra_hosts` 提供），本地开发 `127.0.0.1`。
 - ⚠️ **维护约定**：steady 原始表 schema 变更时，须**手工 re-vendor**
@@ -220,7 +224,8 @@ deploy/
 └── migrations/        # 幂等迁移（schema_migrations 台账）
 scripts/
 ├── init-db.sh         # 一次性建库（CREATE DATABASE + 施加 init.sql）
-└── migrate.sh         # 迁移应用 + --check 列漂移检测
+├── migrate.sh         # 迁移应用 + --check 列漂移检测
+└── reconcile_calendar.py  # calendar 对账（datahub vs steady 逐位比对，切换放行门）
 ```
 
 ---
