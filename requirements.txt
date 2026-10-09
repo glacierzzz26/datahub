@@ -1,0 +1,17 @@
+# datahub 运行时依赖（Python 3.12）
+# 关键版本在实现期于容器内验证（蓝图 §2 / §13.1）：
+#   python -c "import mcp; print(mcp.__version__)"
+
+# HTTP 契约出口
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.0
+
+# MCP 门面（Streamable HTTP）。
+# ⚠️ 锁 <2：mcp 2.x 已把 FastMCP 改名为 MCPServer，API 不兼容（蓝图按 FastMCP 设计）。
+mcp==1.30.0
+
+# 外部取数
+requests==2.32.5
+akshare>=1.14
+pandas>=2.2
