@@ -80,6 +80,22 @@ def test_fetch_recent_anchors_at_end():
         "2026-01-01", "2026-01-02"}
 
 
+def test_fetch_recent_none_limit_returns_all():
+    """limit=None（--all）→ 不设行数上限，返回该锚点前**全部**行（Phase 3 全区间门）。"""
+    from sqlalchemy import create_engine, text
+    engine = create_engine("sqlite://")
+    with engine.begin() as c:
+        c.execute(text(
+            "CREATE TABLE trade_calendar (cal_date DATE, is_open BOOLEAN, exchange TEXT)"))
+        for d in ("2026-01-01", "2026-01-02", "2026-01-05", "2027-06-01"):
+            c.execute(text(
+                "INSERT INTO trade_calendar VALUES (:d, 1, 'SSE')"), {"d": d})
+    assert set(_rc.fetch_recent(engine, None)) == {
+        "2026-01-01", "2026-01-02", "2026-01-05", "2027-06-01"}
+    assert set(_rc.fetch_recent(engine, None, "2026-12-31")) == {
+        "2026-01-01", "2026-01-02", "2026-01-05"}
+
+
 def test_dsn_defaults_and_fallback(monkeypatch):
     for k in ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
               "STEADY_DB_NAME", "STEADY_DB_HOST"):

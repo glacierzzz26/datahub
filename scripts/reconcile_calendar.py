@@ -9,7 +9,10 @@
 用法（仓库根目录）：
     DB_HOST=127.0.0.1 DB_USER=quant DB_PASSWORD=... DB_NAME=datahub \
     STEADY_DB_NAME=quant_system \
-    python scripts/reconcile_calendar.py [--limit 60]
+    python scripts/reconcile_calendar.py [--limit 60 | --all] [--end YYYY-MM-DD]
+
+- `--limit N`（默认 60）：锚点前最近 N 行比对（灰度切采集用）；
+- `--all`：锚点前**全部**行比对（Phase 3 读切换前的**全区间**放行门）。
 
 - datahub 侧读 `DB_*`（默认库 `datahub`）；
 - steady 侧读 `STEADY_DB_*`（默认库 `quant_system`）；未设的项回退到 `DB_*`
@@ -59,22 +62,27 @@ def _dsn(prefix: str, default_name: str) -> str:
     return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 
-def fetch_recent(engine, limit: int, end=None) -> dict:
+def fetch_recent(engine, limit: int | None, end=None) -> dict:
     """取该库「截至 `end`（含）的最近 `limit` 行」 → {cal_date: (is_open, exchange)}。
+
+    `limit=None` → 不设行数上限（全量，供 Phase 3 读切换前的**全区间**比对）。
 
     ⚠️ **必须按同一 `end` 锚对齐**：两侧日历的**最大日期常不同**（steady 可能预载到
     下半年、datahub 只到采集窗末），若各取「最近 N 行」会取到**不重叠的两段**，逐位比对
     全成 db_anomaly/false_pos 伪偏离（实测：steady→2027-07、datahub→2026-12 → 60/60 假偏离）。
-    锚定同一 `end` 后，两侧窗口才可比。`end=None` 表示不设上界（各取全表最近 N 行）。
+    锚定同一 `end` 后，两侧窗口才可比。`end=None` 表示不设上界（各取全表）。
     """
     from sqlalchemy import text
 
     sql = "SELECT cal_date, is_open, exchange FROM trade_calendar"
-    params: dict = {"n": limit}
+    params: dict = {}
     if end is not None:
         sql += " WHERE cal_date <= :end"
         params["end"] = end
-    sql += " ORDER BY cal_date DESC LIMIT :n"
+    sql += " ORDER BY cal_date DESC"
+    if limit is not None:
+        sql += " LIMIT :n"
+        params["n"] = limit
     with engine.connect() as c:
         rows = c.execute(text(sql), params).all()
     return {r[0]: (bool(r[1]), r[2]) for r in rows}
@@ -96,6 +104,9 @@ def compare(dh_rows: dict, steady_rows: dict) -> tuple[Counter, dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="calendar 对账（datahub vs steady）")
     ap.add_argument("--limit", type=int, default=60, help="锚点前 N 行（默认 60）")
+    ap.add_argument("--all", action="store_true",
+                    help="全量比对（对锚点前所有行；忽略 --limit）。Phase 3 读切换前的"
+                         "全区间放行门用")
     ap.add_argument("--end", type=str, default=None,
                     help="窗口上界（含，YYYY-MM-DD）；默认今天。两侧按此锚对齐"
                          "（两侧最大日期常不同，各取最近 N 会错位）")
@@ -106,14 +117,15 @@ def main() -> int:
     from sqlalchemy import create_engine
 
     end = args.end or date.today().isoformat()
+    limit = None if args.all else args.limit
     dh_engine = create_engine(_dsn("DB_", "datahub"))
     steady_engine = create_engine(_dsn("STEADY_DB_", "quant_system"))
-    dh_rows = fetch_recent(dh_engine, args.limit, end)
-    steady_rows = fetch_recent(steady_engine, args.limit, end)
+    dh_rows = fetch_recent(dh_engine, limit, end)
+    steady_rows = fetch_recent(steady_engine, limit, end)
 
     counts, detail = compare(dh_rows, steady_rows)
     print(f"datahub={len(dh_rows)} 行  steady={len(steady_rows)} 行  "
-          f"锚点={end} 窗口={args.limit}")
+          f"锚点={end} 窗口={'全量' if args.all else args.limit}")
     for cat in CATEGORIES:
         print(f"  {cat:10s} {counts.get(cat, 0)}")
     for cat, rows in detail.items():

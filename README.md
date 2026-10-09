@@ -136,10 +136,16 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   `CREATE DATABASE datahub` + 施加 `init.sql`。
 - **迁移**（幂等）：`./scripts/migrate.sh` 应用 `deploy/migrations/*.sql`（`schema_migrations` 台账）；
   `./scripts/migrate.sh --check` 仅报告列漂移。
-- **calendar 对账**（切换放行门）：`python scripts/reconcile_calendar.py [--limit 60]`
+- **calendar 对账**（切换放行门）：`python scripts/reconcile_calendar.py [--limit 60 | --all]`
   ——开**两个引擎**（`DB_*`=datahub、`STEADY_DB_*`=steady，未设项回退 `DB_*`）分取最近
   N 行，按 `cal_date` 逐位分类（`accepted`/`drifted`/`db_anomaly`/`false_pos`/`rejected`）；
   有非 `accepted` → 退出码 1（`--allow-drift` 仅报告）。历史拉取不占当日采集窗。
+  `--limit N`（默认 60）用于灰度切采集；`--all` 比对锚点前**全部**行，用于 **Phase 3 读切换前的
+  全区间放行门**（steady 侧读取改走 datahub 前，须先证两侧全史逐位一致）。
+  > ⚠️ **日历覆盖**：BaoStock `trade_cal_rows` 默认窗口仅 `today−730d … today+365d`（约 2 年），
+  > 故 datahub **采集落库的日历默认只有近 2 年**，远窄于 steady 全史（1990→今）。**Phase 3 读切换前
+  > 必须补齐全史**——走 AkShare 路径 `ak.tool_trade_date_hist_sina()`（新浪源返回**全部交易日**）
+  > 一次性 upsert（PK `cal_date` 幂等，与 BaoStock 近端窗无冲突），再 `--all` 对账零偏差方可翻闸。
 - **DB 环境变量**：`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（默认库名 `datahub`）。
   容器内 `DB_HOST=quant-postgres`——datahub 双服务**加入 PG 所在 docker 网络**（`networks.pg`，
   默认 `steady-20260821-c8d0651_default`，`STEADY_NETWORK` 可覆盖），按 PG **容器名**连；
