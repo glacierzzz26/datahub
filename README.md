@@ -5,6 +5,8 @@
 
 - **本阶段（Phase 1）**：一个独立服务、**不建自有库**（按需抓 + 缓存）、
   **steady 零改动**（两条线并行、互不依赖）。
+- **Phase 2（进行中）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
+  + 逐数据集灰度切换。当前已落地**建库地基**（见「数据库」段），采集栈/raw 出口随后续 PR。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -71,6 +73,27 @@ DATAHUB_EXT_DATASETS=hotspot.indices,hotspot.sectors_gain,industry.catalog
 
 ---
 
+## 数据库（Phase 2 · 建库地基）
+
+Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立库 `datahub`**，承载原始采集表。
+本轮仅落地**建库地基**（采集栈与 raw 出口在后续 PR）。
+
+- **schema 真源**：`deploy/postgres/init.sql`（**仅原始表**：`stock_basic` / `daily_price` /
+  `daily_valuation` / `financial_indicator` / `trade_calendar` / `market_hotspot` / `task_run`）。
+  列/类型/主键/唯一键/索引**逐字对齐 steady**，由 `tests/test_schema_parity.py` 对
+  `tests/fixtures/steady_raw_schema.sql`（vendor 冻结副本）断言。
+- **建库**（一次性，幂等）：`./scripts/init-db.sh`——在 `quant-postgres` 容器上
+  `CREATE DATABASE datahub` + 施加 `init.sql`。
+- **迁移**（幂等）：`./scripts/migrate.sh` 应用 `deploy/migrations/*.sql`（`schema_migrations` 台账）；
+  `./scripts/migrate.sh --check` 仅报告列漂移。
+- **DB 环境变量**：`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（默认库名 `datahub`）。
+  容器内 `DB_HOST=host.docker.internal`（compose `extra_hosts` 提供），本地开发 `127.0.0.1`。
+- ⚠️ **维护约定**：steady 原始表 schema 变更时，须**手工 re-vendor**
+  `tests/fixtures/steady_raw_schema.sql`（逐字拷贝 + 更新头注 commit）+ 在 datahub 补一条
+  `deploy/migrations/NNN_*.sql`，二者与 parity 测试在同一 PR 内改。
+
+---
+
 ## 鉴权
 
 - 请求头 `Authorization: Bearer <DATAHUB_TOKEN>`；缺失/错误 → **401**。
@@ -132,6 +155,13 @@ app/
 ├── server.py          # 入口：装配 FastAPI + 挂载 MCP + /healthz
 ├── datasets/          # spec / registry / external（Phase 1 数据集）
 └── providers/         # base（with_timeout）/ net（超时补丁）/ registry / ext（取数）
+
+deploy/
+├── postgres/init.sql  # 原始表 schema（仅采集表；逐字对齐 steady）
+└── migrations/        # 幂等迁移（schema_migrations 台账）
+scripts/
+├── init-db.sh         # 一次性建库（CREATE DATABASE + 施加 init.sql）
+└── migrate.sh         # 迁移应用 + --check 列漂移检测
 ```
 
 ---
