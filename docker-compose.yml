@@ -1,7 +1,14 @@
-# datahub —— 单服务（Phase 1）
+# datahub —— 单镜像双服务（Phase 2）
 #
 # 部署标识纪律：镜像标签 = <name>:v0.0.0-<短hash>；镜像内烘焙 APP_VERSION + GIT_SHORT，
 # 生产核验以此二者确认「跑的是哪个版本」。
+#
+# 双服务同为 `datahub:<ver>` 镜像：
+#   - datahub           API（python -m app.server，:8100）
+#   - datahub-collector 采集调度（python -m app.tasks，healthz :9200）
+# 为何分两容器（蓝图 §拓扑）：① BlockingScheduler 与 uvicorn 同进程会饿死 ASGI；
+# ② watchdog `os._exit(1)` 依赖 restart 拉起，同进程会连 API 一起打下去；③ 端口独立探活。
+# DB 复用**生产 PG 实例的独立库 datahub**：容器内经 host.docker.internal 连宿主 PG。
 services:
   datahub:
     build:
@@ -12,6 +19,11 @@ services:
     image: datahub:${APP_VERSION:-v0.0.0}-${GIT_SHORT:-unknown}
     env_file:
       - .env
+    environment:
+      # 容器内连宿主 PG（Linux Docker ≥20.10 经 host-gateway）；覆盖 .env 的 127.0.0.1
+      DB_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       # 拓扑未定前先绑本机（蓝图 §9）；跨机再改绑 LAN IP + 反代 + token
       - "127.0.0.1:8100:8100"
@@ -20,6 +32,37 @@ services:
       # slim 镜像无 curl：用 python 标准库探活
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/v1/healthz', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  datahub-collector:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-v0.0.0}
+        GIT_SHORT: ${GIT_SHORT:-unknown}
+    image: datahub:${APP_VERSION:-v0.0.0}-${GIT_SHORT:-unknown}
+    command: ["python", "-m", "app.tasks"]
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      HEALTH_PORT: "9200"
+      DB_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # healthz（watchdog status_provider）—— 过渡期采集告警信号（见 phase2 蓝图）
+      - "127.0.0.1:9200:9200"
+    volumes:
+      # watchdog 退出计数落 /app/logs/.watchdog_exits（跨重启留存）
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9200/healthz', timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3

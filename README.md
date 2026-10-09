@@ -6,7 +6,8 @@
 - **本阶段（Phase 1）**：一个独立服务、**不建自有库**（按需抓 + 缓存）、
   **steady 零改动**（两条线并行、互不依赖）。
 - **Phase 2（进行中）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
-  + 逐数据集灰度切换。当前已落地**建库地基**（见「数据库」段），采集栈/raw 出口随后续 PR。
+  （已落地：建库地基 + 采集子系统骨架，**默认全关**）+ 逐数据集灰度切换。raw 出口与
+  calendar 切换随后续 PR。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -70,6 +71,41 @@ DATAHUB_EXT_DATASETS=           # 数据集白名单（逗号）
 DATAHUB_EXT_ENABLED=1
 DATAHUB_EXT_DATASETS=hotspot.indices,hotspot.sectors_gain,industry.catalog
 ```
+
+---
+
+## 采集子系统（Phase 2 · 搬栈，默认全关）
+
+Phase 2 起 datahub 接管**核心原始采集**（搬自 steady collector）。本阶段代码落地即
+**默认全关**——不注册任务、不发采集请求、不写库（部署零行为变更）。
+
+### 双服务（单镜像）
+
+| 服务 | 命令 | 端口 | 作用 |
+|---|---|---|---|
+| `datahub` | `python -m app.server` | 8100 | API（MCP + HTTP） |
+| `datahub-collector` | `python -m app.tasks` | 9200 | 采集调度 + 看门狗（`/healthz`） |
+
+同一 `datahub:<ver>` 镜像起两个容器：① `BlockingScheduler` 与 uvicorn 同进程会饿死
+ASGI；② 看门狗 `os._exit(1)` 依赖 `restart` 拉起，同进程会连 API 一起打下去；③ 端口
+独立探活。`TZ=Asia/Shanghai`、`HEALTH_PORT=9200`、`volumes: ./logs:/app/logs`（看门狗
+退出计数落盘）。
+
+### 采集闸门（默认全关）
+
+```
+DATAHUB_COLLECT_ENABLED=           # 总开关
+DATAHUB_COLLECT_DATASETS=          # 数据集白名单（逗号）：stock_basic/calendar/index/daily/valuation/finance
+```
+
+**两层闸门**（任一关即不采集）：① 注册层——`register_jobs` 只为已放闸的数据集
+`add_job`（全关 ⇒ `scheduler.get_jobs()==[]`）；② 调用层——`@collect_gated(dataset)`，
+挡住 `watchdog.startup_catchup` 与手工 `cli` 绕过注册层的直调。全关时**不**启动看门狗/
+补跑（连 `trade_calendar` 查询都不发生）。翻闸 = 改 `.env` + 重启容器。
+
+> ⚠️ **告警链过渡期断链（已知缺口）**：搬来的看门狗把 failed 行写 **datahub 库**，而
+> quant-engine 的 `notify_scheduler` 读 **steady 库** → 过渡期采集失败不再推飞书。信号
+> 改看 datahub-collector `/healthz`；datahub 侧告警器为后续项。
 
 ---
 
@@ -157,7 +193,13 @@ app/
 ├── server.py          # 入口：装配 FastAPI + 挂载 MCP + /healthz
 ├── datasets/          # spec / registry / external（Phase 1 数据集）
 ├── models/            # ORM（tables.py，仅原始表子集；对齐 init.sql）
-└── providers/         # base（with_timeout）/ net（超时补丁）/ registry / ext（取数）
+├── providers/         # base（with_timeout）/ net（超时补丁）/ registry / ext（取数）
+├── tasks.py           # [Phase 2] 采集调度入口（python -m app.tasks）+ 采集闸门（注册层/调用层）
+├── watchdog.py        # [Phase 2] 任务级看门狗（卡死自愈 + 补跑）
+├── cli.py             # [Phase 2] 采集手动入口（python -m app.cli，受采集闸门约束）
+├── collectors/        # [Phase 2] 原始采集器（daily/valuation/finance/index/calendar/stock/backfill）
+├── cleaners/          # [Phase 2] 清洗 + 复权因子守卫（factor_guard）
+└── sources/           # [Phase 2] 数据源适配（baostock / tencent）
 
 deploy/
 ├── postgres/init.sql  # 原始表 schema（仅采集表；逐字对齐 steady）
