@@ -8,7 +8,12 @@
 #   - datahub-collector 采集调度（python -m app.tasks，healthz :9200）
 # 为何分两容器（蓝图 §拓扑）：① BlockingScheduler 与 uvicorn 同进程会饿死 ASGI；
 # ② watchdog `os._exit(1)` 依赖 restart 拉起，同进程会连 API 一起打下去；③ 端口独立探活。
-# DB 复用**生产 PG 实例的独立库 datahub**：容器内经 host.docker.internal 连宿主 PG。
+# DB 复用**生产 PG 实例的独立库 datahub**：datahub 两服务**加入 PG 所在 docker 网络**
+# （下方 `networks.pg`），按容器名 `quant-postgres` 连。
+# ⚠️ 为何不用 host.docker.internal：生产 PG 仅监听 127.0.0.1:5432（loopback），
+#    容器经 host-gateway(172.17.0.1) 连会被拒（实测 Connection refused）——故弃用该法。
+#    改加入 PG 网络：PG 每次重建会自动回到自己的网络，稳定；网络名由 steady 固定
+#    `-p steady-20260821-c8d0651` 决定（跨 steady 发布稳定），可用 STEADY_NETWORK 覆盖。
 services:
   datahub:
     build:
@@ -20,10 +25,11 @@ services:
     env_file:
       - .env
     environment:
-      # 容器内连宿主 PG（Linux Docker ≥20.10 经 host-gateway）；覆盖 .env 的 127.0.0.1
-      DB_HOST: host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # 容器内按 PG 容器名连（同处 pg 网络）；覆盖 .env 的宿主侧 127.0.0.1
+      DB_HOST: quant-postgres
+    networks:
+      - default
+      - pg
     ports:
       # 拓扑未定前先绑本机（蓝图 §9）；跨机再改绑 LAN IP + 反代 + token
       - "127.0.0.1:8100:8100"
@@ -50,9 +56,11 @@ services:
     environment:
       TZ: Asia/Shanghai
       HEALTH_PORT: "9200"
-      DB_HOST: host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # 容器内按 PG 容器名连（同处 pg 网络）
+      DB_HOST: quant-postgres
+    networks:
+      - default
+      - pg
     ports:
       # healthz（watchdog status_provider）—— 过渡期采集告警信号（见 phase2 蓝图）
       - "127.0.0.1:9200:9200"
@@ -67,3 +75,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+networks:
+  default:
+  # PG 所在网络（steady 固定项目名 → 网络名稳定）；datahub 加入以按容器名连 PG。
+  pg:
+    external: true
+    name: ${STEADY_NETWORK:-steady-20260821-c8d0651_default}
