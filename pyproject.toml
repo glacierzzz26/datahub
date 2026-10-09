@@ -21,7 +21,13 @@ dependencies = [
 dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
 
 [tool.setuptools]
-packages = ["app", "app.datasets", "app.providers", "app.providers.ext"]
+packages = [
+    "app",
+    "app.datasets",
+    "app.models",
+    "app.providers",
+    "app.providers.ext",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

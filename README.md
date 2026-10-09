@@ -146,6 +146,8 @@ pytest -q
 ```
 app/
 ├── config.py          # DATAHUB_* env（双闸门 ext_enabled）
+├── collect_config.py  # 采集子系统配置（COLLECTOR_*/BAOSTOCK_*/TENCENT_* env）+ 采集闸门
+├── db.py              # DB 连接（单例引擎 + upsert）；DSN 读 DB_*，默认库 datahub
 ├── auth.py            # Bearer 鉴权依赖
 ├── cache.py           # TTL 缓存 + 单飞
 ├── ratelimit.py       # 信号量 + 最小间隔 + 黑名单冷却
@@ -154,6 +156,7 @@ app/
 ├── mcp_facade.py      # FastMCP 实例 + 由注册表生成 tools
 ├── server.py          # 入口：装配 FastAPI + 挂载 MCP + /healthz
 ├── datasets/          # spec / registry / external（Phase 1 数据集）
+├── models/            # ORM（tables.py，仅原始表子集；对齐 init.sql）
 └── providers/         # base（with_timeout）/ net（超时补丁）/ registry / ext（取数）
 
 deploy/
