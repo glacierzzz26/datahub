@@ -39,3 +39,18 @@ def test_token_not_configured_fails_closed(monkeypatch):
     monkeypatch.setattr(config, "TOKEN", "")
     r = _client().get("/v1/datasets", headers={"Authorization": "Bearer anything"})
     assert r.status_code == 401
+
+
+def test_gate_off_returns_503(auth_token, monkeypatch):
+    """未翻闸：取数返回 503（信封），且不发外部请求。"""
+    monkeypatch.setattr(config, "EXT_ENABLED", False)
+    r = _client().get("/v1/datasets/hotspot.indices",
+                      headers={"Authorization": f"Bearer {auth_token}"})
+    assert r.status_code == 503
+    assert r.json()["code"] == 503
+
+
+def test_unknown_dataset_404(auth_token):
+    r = _client().get("/v1/datasets/nope.nope",
+                      headers={"Authorization": f"Bearer {auth_token}"})
+    assert r.status_code == 404

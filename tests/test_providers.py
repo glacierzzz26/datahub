@@ -10,6 +10,27 @@ from app.providers import registry as prov_reg
 from app.providers.ext import akshare_hotspot
 from app.ratelimit import Blocklist, is_source_blocked
 
+# ---------- 闸门：未翻闸 → 零外部请求 + 503 ----------
+
+
+def test_gate_off_no_external_call(monkeypatch, no_retry):
+    from app import config
+
+    monkeypatch.setattr(config, "EXT_ENABLED", False)
+    monkeypatch.setattr(config, "EXT_DATASETS", [])
+    called = {"n": 0}
+
+    def _fetch(*a, **k):
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr(prov_reg, "get_provider",
+                        lambda name: types.SimpleNamespace(fetch=_fetch))
+    with pytest.raises(service.DatasetUnavailable):
+        service.get_dataset("hotspot.indices", {})
+    assert called["n"] == 0
+
+
 # ---------- 源链内降级（主源失败 → 兜底源）----------
 
 def test_sectors_gain_falls_back_to_em(monkeypatch):
