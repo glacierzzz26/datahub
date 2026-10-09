@@ -87,12 +87,37 @@ def test_hotspot_hot_stocks_columns(monkeypatch):
     _assert_columns("hotspot.hot_stocks", rows)
 
 
-def test_industry_catalog_columns(monkeypatch):
-    df = pd.DataFrame([{"板块名称": "白酒", "板块代码": "BK0477", "涨跌幅": 3.1}])
-    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_name_em", lambda: df)
+def test_industry_catalog_from_ths(monkeypatch):
+    """主源同花顺：name_ths 取 name/code + summary_ths 按名补涨跌幅。"""
+    names = pd.DataFrame([{"name": "白酒", "code": "881273"}])
+    summary = pd.DataFrame([{"板块": "白酒", "涨跌幅": 3.1}])
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_name_ths", lambda: names)
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_summary_ths", lambda: summary)
     rows = akshare_industry.fetch("industry.catalog", {})
-    assert rows == [{"name": "白酒", "code": "BK0477", "change_pct": 3.1}]
+    assert rows == [{"name": "白酒", "code": "881273", "change_pct": 3.1}]
     _assert_columns("industry.catalog", rows)
+
+
+def test_industry_catalog_falls_back_to_em(monkeypatch):
+    def boom():
+        raise RuntimeError("同花顺不可达")
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_name_ths", boom)
+    em = pd.DataFrame([{"板块名称": "银行", "板块代码": "BK0477", "涨跌幅": 1.2}])
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_name_em", lambda: em)
+    rows = akshare_industry.fetch("industry.catalog", {})
+    assert rows == [{"name": "银行", "code": "BK0477", "change_pct": 1.2}]
+
+
+def test_industry_catalog_ths_without_summary(monkeypatch):
+    """概览失败时目录仍在，涨跌幅留空（不阻断）。"""
+    names = pd.DataFrame([{"name": "白酒", "code": "881273"}])
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_name_ths", lambda: names)
+
+    def boom():
+        raise RuntimeError("概览不可达")
+    monkeypatch.setattr(akshare_industry.ak, "stock_board_industry_summary_ths", boom)
+    rows = akshare_industry.fetch("industry.catalog", {})
+    assert rows == [{"name": "白酒", "code": "881273", "change_pct": None}]
 
 
 def test_industry_members_requires_param(monkeypatch):

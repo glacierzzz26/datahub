@@ -31,6 +31,37 @@ def test_gate_off_no_external_call(monkeypatch, no_retry):
     assert called["n"] == 0
 
 
+# ---------- 空结果即失败（不静默返回空数组）----------
+
+def test_hot_stocks_all_sources_fail_raises(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("东财不可达")
+    monkeypatch.setattr(akshare_hotspot.ak, "stock_hot_rank_em", boom)
+    monkeypatch.setattr(akshare_hotspot.ak, "stock_zt_pool_em", boom)
+    with pytest.raises(RuntimeError):
+        akshare_hotspot.fetch("hotspot.hot_stocks", {})
+
+
+def test_stale_fallback_when_upstream_fails(monkeypatch, enable_all_ext, no_retry):
+    """上游全失败但缓存有旧值 → 返 stale + meta.stale=true（不返回空、不 503）。"""
+    ok = types.SimpleNamespace(
+        fetch=lambda *a: [{"name": "X", "code": "1", "close": 1.0, "change_pct": 1.0}])
+    monkeypatch.setattr(prov_reg, "get_provider", lambda name: ok)
+    rows, meta = service.get_dataset("hotspot.indices", {})
+    assert rows and meta["stale"] is False
+
+    # 令缓存条目过期（直接操纵内部 clock：expire_at 置 0）
+    for entry in service._cache._data.values():
+        entry.expire_at = 0.0
+
+    def boom(dataset_id, params):
+        raise RuntimeError("全源失败")
+    monkeypatch.setattr(prov_reg, "get_provider",
+                        lambda name: types.SimpleNamespace(fetch=boom))
+    rows, meta = service.get_dataset("hotspot.indices", {})
+    assert meta["stale"] is True and rows
+
+
 # ---------- 源链内降级（主源失败 → 兜底源）----------
 
 def test_sectors_gain_falls_back_to_em(monkeypatch):
