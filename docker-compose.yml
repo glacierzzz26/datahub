@@ -1,0 +1,26 @@
+# datahub —— 单服务（Phase 1）
+#
+# 部署标识纪律：镜像标签 = <name>:v0.0.0-<短hash>；镜像内烘焙 APP_VERSION + GIT_SHORT，
+# 生产核验以此二者确认「跑的是哪个版本」。
+services:
+  datahub:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-v0.0.0}
+        GIT_SHORT: ${GIT_SHORT:-unknown}
+    image: datahub:${APP_VERSION:-v0.0.0}-${GIT_SHORT:-unknown}
+    env_file:
+      - .env
+    ports:
+      # 拓扑未定前先绑本机（蓝图 §9）；跨机再改绑 LAN IP + 反代 + token
+      - "127.0.0.1:8100:8100"
+    restart: unless-stopped
+    healthcheck:
+      # slim 镜像无 curl：用 python 标准库探活
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/v1/healthz', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
