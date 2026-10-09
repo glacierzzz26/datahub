@@ -141,7 +141,12 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   N 行，按 `cal_date` 逐位分类（`accepted`/`drifted`/`db_anomaly`/`false_pos`/`rejected`）；
   有非 `accepted` → 退出码 1（`--allow-drift` 仅报告）。历史拉取不占当日采集窗。
 - **DB 环境变量**：`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（默认库名 `datahub`）。
-  容器内 `DB_HOST=host.docker.internal`（compose `extra_hosts` 提供），本地开发 `127.0.0.1`。
+  容器内 `DB_HOST=quant-postgres`——datahub 双服务**加入 PG 所在 docker 网络**（`networks.pg`，
+  默认 `steady-20260821-c8d0651_default`，`STEADY_NETWORK` 可覆盖），按 PG **容器名**连；
+  本地开发 `127.0.0.1`。
+  > ⚠️ **为何用容器名而非 `host.docker.internal`**：生产 PG 仅监听 `127.0.0.1:5432`（loopback），
+  > 容器经 `host-gateway`(172.17.0.1) 连会被拒（实测 `Connection refused`）。加入 PG 网络更稳
+  > （PG 重建自动回网）；网络名由 steady 固定项目名 `-p steady-20260821-c8d0651` 决定，跨发布稳定。
 - ⚠️ **维护约定**：steady 原始表 schema 变更时，须**手工 re-vendor**
   `tests/fixtures/steady_raw_schema.sql`（逐字拷贝 + 更新头注 commit）+ 在 datahub 补一条
   `deploy/migrations/NNN_*.sql`，二者与 parity 测试在同一 PR 内改。

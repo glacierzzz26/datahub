@@ -58,6 +58,28 @@ def test_compare_zero_drift_passes():
     assert detail == {}
 
 
+def test_fetch_recent_anchors_at_end():
+    """窗口上界必须锚定同一 end —— 否则两侧各取「最近 N 行」会取到不重叠段。
+
+    回归场景：steady 日历预载到 2027、datahub 只到 2026-12，各取最近 2 行
+    → 全成假偏离；锚 end=2026-12-31 后两侧窗口可比。用 sqlite in-memory 真跑 SQL。
+    """
+    from sqlalchemy import create_engine, text
+    engine = create_engine("sqlite://")
+    with engine.begin() as c:
+        c.execute(text(
+            "CREATE TABLE trade_calendar (cal_date DATE, is_open BOOLEAN, exchange TEXT)"))
+        for d in ("2026-01-01", "2026-01-02", "2027-06-01", "2027-06-02"):
+            c.execute(text(
+                "INSERT INTO trade_calendar VALUES (:d, 1, 'SSE')"), {"d": d})
+
+    # 无 end：最近 2 行落在 2027
+    assert set(_rc.fetch_recent(engine, 2)) == {"2027-06-01", "2027-06-02"}
+    # 锚 end=2026-12-31：最近 2 行落在 2026（与 2027 段不重叠——修复前此处取到 2027）
+    assert set(_rc.fetch_recent(engine, 2, "2026-12-31")) == {
+        "2026-01-01", "2026-01-02"}
+
+
 def test_dsn_defaults_and_fallback(monkeypatch):
     for k in ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
               "STEADY_DB_NAME", "STEADY_DB_HOST"):

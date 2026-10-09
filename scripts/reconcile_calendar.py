@@ -22,6 +22,7 @@ import argparse
 import os
 import sys
 from collections import Counter, defaultdict
+from datetime import date
 
 # 对账分类词表（对齐仓库 rewrite_adj_factor.classify 的五类范式）：
 #   accepted   → 双侧都有且逐位相等（可切）
@@ -58,16 +59,24 @@ def _dsn(prefix: str, default_name: str) -> str:
     return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 
-def fetch_recent(engine, limit: int) -> dict:
-    """取该库最近 `limit` 行 → {cal_date: (is_open, exchange)}。"""
+def fetch_recent(engine, limit: int, end=None) -> dict:
+    """取该库「截至 `end`（含）的最近 `limit` 行」 → {cal_date: (is_open, exchange)}。
+
+    ⚠️ **必须按同一 `end` 锚对齐**：两侧日历的**最大日期常不同**（steady 可能预载到
+    下半年、datahub 只到采集窗末），若各取「最近 N 行」会取到**不重叠的两段**，逐位比对
+    全成 db_anomaly/false_pos 伪偏离（实测：steady→2027-07、datahub→2026-12 → 60/60 假偏离）。
+    锚定同一 `end` 后，两侧窗口才可比。`end=None` 表示不设上界（各取全表最近 N 行）。
+    """
     from sqlalchemy import text
 
+    sql = "SELECT cal_date, is_open, exchange FROM trade_calendar"
+    params: dict = {"n": limit}
+    if end is not None:
+        sql += " WHERE cal_date <= :end"
+        params["end"] = end
+    sql += " ORDER BY cal_date DESC LIMIT :n"
     with engine.connect() as c:
-        rows = c.execute(
-            text("SELECT cal_date, is_open, exchange FROM trade_calendar"
-                 " ORDER BY cal_date DESC LIMIT :n"),
-            {"n": limit},
-        ).all()
+        rows = c.execute(text(sql), params).all()
     return {r[0]: (bool(r[1]), r[2]) for r in rows}
 
 
@@ -86,21 +95,25 @@ def compare(dh_rows: dict, steady_rows: dict) -> tuple[Counter, dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="calendar 对账（datahub vs steady）")
-    ap.add_argument("--limit", type=int, default=60, help="各库取最近 N 行（默认 60）")
+    ap.add_argument("--limit", type=int, default=60, help="锚点前 N 行（默认 60）")
+    ap.add_argument("--end", type=str, default=None,
+                    help="窗口上界（含，YYYY-MM-DD）；默认今天。两侧按此锚对齐"
+                         "（两侧最大日期常不同，各取最近 N 会错位）")
     ap.add_argument("--allow-drift", action="store_true",
                     help="有非 accepted 分类也返回 0（仅报告）")
     args = ap.parse_args()
 
     from sqlalchemy import create_engine
 
+    end = args.end or date.today().isoformat()
     dh_engine = create_engine(_dsn("DB_", "datahub"))
     steady_engine = create_engine(_dsn("STEADY_DB_", "quant_system"))
-    dh_rows = fetch_recent(dh_engine, args.limit)
-    steady_rows = fetch_recent(steady_engine, args.limit)
+    dh_rows = fetch_recent(dh_engine, args.limit, end)
+    steady_rows = fetch_recent(steady_engine, args.limit, end)
 
     counts, detail = compare(dh_rows, steady_rows)
     print(f"datahub={len(dh_rows)} 行  steady={len(steady_rows)} 行  "
-          f"窗口={args.limit}")
+          f"锚点={end} 窗口={args.limit}")
     for cat in CATEGORIES:
         print(f"  {cat:10s} {counts.get(cat, 0)}")
     for cat, rows in detail.items():
