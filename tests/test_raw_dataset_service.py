@@ -30,6 +30,16 @@ def test_trade_calendar_declared_raw():
     assert spec.column_names == ("cal_date", "is_open", "exchange")
 
 
+def test_stock_basic_declared_raw():
+    spec = registry.get_spec("stock_basic")
+    assert spec is not None
+    assert spec.kind == "raw"
+    assert registry.source_chain("stock_basic") == ("db",)
+    assert spec.ttl_seconds is None
+    assert spec.column_names == ("code", "name", "market", "industry",
+                                 "list_date", "status", "universe", "data_scope")
+
+
 def test_raw_readable_when_ext_gate_off(monkeypatch, no_retry):
     monkeypatch.setattr(config, "EXT_ENABLED", False)
     monkeypatch.setattr(config, "EXT_DATASETS", [])

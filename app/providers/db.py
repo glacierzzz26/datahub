@@ -11,10 +11,11 @@
 import logging
 from datetime import date
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import db
-from app.models.tables import TradeCalendar
+from app.models.tables import StockBasic, TradeCalendar
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,13 @@ def _as_date(value: object) -> date | None:
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value))
+
+
+def _split_csv(value: object) -> list[str]:
+    """逗号分隔参数 → 去空列表（空 → []，表示不加过滤）。"""
+    if value in (None, ""):
+        return []
+    return [s.strip() for s in str(value).split(",") if s.strip()]
 
 
 def _trade_calendar(session: Session, params: dict) -> list[dict]:
@@ -47,9 +55,56 @@ def _trade_calendar(session: Session, params: dict) -> list[dict]:
     ]
 
 
+# 排序白名单（非法值回退 code）——与 backend `stockSortColumns` 对齐。
+_STOCK_SORT = ("code", "name", "list_date", "market", "industry")
+
+
+def _stock_basic(session: Session, params: dict) -> list[dict]:
+    """股票列表：支持 code/market/universe/scope 白名单（逗号 IN）、行业精确、
+    关键词模糊（大小写不敏感）、白名单排序（NULLS LAST）、分页。**一次查询，无 N+1**。"""
+    q = session.query(StockBasic)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(StockBasic.code.in_(codes))
+    markets = _split_csv(params.get("market"))
+    if markets:
+        q = q.filter(StockBasic.market.in_(markets))
+    if params.get("industry"):
+        q = q.filter(StockBasic.industry == params["industry"])
+    universes = _split_csv(params.get("universe"))
+    if universes:
+        q = q.filter(StockBasic.universe.in_(universes))
+    scopes = _split_csv(params.get("scope"))
+    if scopes:
+        q = q.filter(StockBasic.data_scope.in_(scopes))
+    keyword = params.get("keyword")
+    if keyword:
+        pat = f"%{keyword}%"
+        q = q.filter(or_(StockBasic.name.ilike(pat), StockBasic.code.ilike(pat)))
+
+    col = params.get("sort") if params.get("sort") in _STOCK_SORT else "code"
+    column = getattr(StockBasic, col)
+    if params.get("order") == "desc":
+        q = q.order_by(column.desc().nulls_last())
+    else:
+        q = q.order_by(column.asc().nulls_last())
+
+    if params.get("limit"):
+        q = q.limit(int(params["limit"]))
+    if params.get("offset"):
+        q = q.offset(int(params["offset"]))
+    return [
+        {"code": r.code, "name": r.name, "market": r.market, "industry": r.industry,
+         "list_date": r.list_date, "status": r.status, "universe": r.universe,
+         "data_scope": r.data_scope}
+        for r in q.all()
+    ]
+
+
 # dataset id → 查询函数（新增 raw 数据集在此登记）
 _FETCHERS = {
     "trade_calendar": _trade_calendar,
+    "stock_basic": _stock_basic,
 }
 
 
