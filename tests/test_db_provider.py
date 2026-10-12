@@ -277,6 +277,34 @@ def test_daily_valuation_last_one(price_session):
     assert rows[0]["trade_date"] == date(2026, 1, 3) and float(rows[0]["pe_ttm"]) == 8.2
 
 
+def test_numeric_columns_serialize_as_json_numbers(price_session):
+    """契约：`ColumnSpec.type == "float"` 的列，wire 必须是 JSON **数字**。
+
+    回归守卫：ORM 把 `NUMERIC` 映射为 `Decimal`，pydantic v2 又把 `Decimal`
+    序列化成 JSON **字符串** —— 与声明的 `float` 不符，且让 Go 侧 `float64`
+    DTO 反序列化失败（`json: cannot unmarshal string into float64`）。生产
+    `daily_valuation` 读切换（首个数值数据集）暴露该缺陷。
+    """
+    import json
+    from decimal import Decimal
+
+    val = db_provider.fetch("daily_valuation", {"codes": "600000", "last": 1})[0]
+    price = db_provider.fetch("daily_price", {"codes": "600000", "last": 1})[0]
+
+    for row, cols in ((val, ("close", "pe_ttm", "pb")),
+                      (price, ("close", "adj_factor"))):
+        for col in cols:
+            v = row[col]
+            assert v is not None
+            assert isinstance(v, float) and not isinstance(v, (Decimal, str, bool)), \
+                (col, type(v))
+
+    # 真正走一遍 JSON：数值列不得被引号包成字符串（date 列不可 json 序列化，故单取数值）
+    s = json.dumps({k: val[k] for k in ("close", "pe_ttm", "pb")})
+    assert '"pe_ttm":"' not in s and '"close":"' not in s
+    assert json.loads(s)["pe_ttm"] == val["pe_ttm"]
+
+
 def test_daily_valuation_asof(price_session):
     rows = db_provider.fetch("daily_valuation",
                              {"codes": "600000", "asof": "2026-01-02"})
