@@ -52,6 +52,18 @@
 |---|---|---|---|---|
 | `trade_calendar` | raw | `start`,`end`(YYYY-MM-DD), `is_open`(bool,默认 true) | cal_date, is_open, exchange | 不缓存 |
 | `stock_basic` | raw | `codes`,`market`,`universe`,`scope`(逗号 IN), `industry`, `keyword`(模糊), `sort`(code/name/list_date/market/industry), `order`(asc/desc), `limit`,`offset` | code, name, market, industry, list_date, status, universe, data_scope | 不缓存 |
+| `daily_price` | raw | `codes`(逗号 IN，**含指数** sh000300), `start`,`end`,`date`(精确), `asof`(≤), `last`(每码最近 N), `fields`(列投影), `adj_not_null` | code, trade_date, open, high, low, close, volume, amount, adj_factor, turnover_rate | 不缓存 |
+| `daily_valuation` | raw | `codes`, `start`,`end`, `asof`, `last`, `fields` | code, trade_date, close, total_mv, float_mv, pe_ttm, pe_static, pb | 不缓存 |
+| `financial_indicator` | raw | `codes`, `as_of`(announce_date≤，防未来函数), `last`, `fields` | code, report_date, announce_date, pe, pb, roe, profit_growth, revenue_growth, debt_ratio, gross_margin | 不缓存 |
+| `latest_trade_date` | raw | `table`(daily_price/daily_valuation), `exclude_index`(bool,默认 true) | trade_date | 不缓存 |
+| `market_ready` | raw | `date`, `threshold`(默认 0.9), `universe`(默认 hs300,zz500) | ready, covered, total | 不缓存 |
+| `dup_keys` | raw | `table`(daily_price/daily_valuation/financial_indicator) | key, n | 不缓存 |
+
+- **`last` 参数**（每 code 最近 N 行，服务端 `ROW_NUMBER`）是为**有界批量**设计：把消费面的
+  窗口/聚合读点（每码最新一条 / top-2 / 21 根窗 / LAG）变成一次往返、无 N+1，无需为每个聚合造专用端点。
+  例：指数条 `daily_price?codes=sh000300&last=2`；20 日动量 `daily_price?codes=…&asof=…&last=21`。
+- **`index` 无独立表**：指数行情在 `daily_price`（code=`sh000300` 等）；`latest_trade_date` 的
+  `exclude_index` 默认 true（对齐 qe `code NOT LIKE 'sh%'`），backend 取数传 false。
 
 - **raw 语义**（与 external 相区别）：① **不受** `DATAHUB_EXT_*` 闸门约束（读自有库，
   不发外部请求）；② **不缓存**（`ttl_seconds=None`）——本地库权威且廉价，无 stale 兜底；

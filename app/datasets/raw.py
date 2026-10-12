@@ -4,6 +4,11 @@
 （`trade_calendar`：params `start`,`end`,`is_open`；列 `cal_date,is_open,exchange`；
 `stock_basic`：params `codes/market/industry/universe/scope/keyword/sort/order/limit/offset`；
 列 `code,name,market,industry,list_date,status,universe,data_scope`）。
+Phase 3 增补：`daily_price`（**含指数行**，无独立 index 表）、`daily_valuation`、
+`financial_indicator`，以及三个**小数据集** `latest_trade_date` / `market_ready` / `dup_keys`。
+
+**`last` 参数**（每 code 最近 N 行，服务端 `ROW_NUMBER`）把 backend 的窗口/聚合类读点
+（LAG / 21 根窗 / top-2 / 每码最新一条）变成**有界批量**，一次往返、无 N+1。
 
 与 external 数据集的差别（服务层 `service.get_dataset` 按 `kind` 分派）：
 - raw **不受** `DATAHUB_EXT_*` 外部采集闸门约束（读自有库，不发外部请求）；
@@ -71,7 +76,165 @@ STOCK_BASIC = DatasetSpec(
     desc="读自有库 stock_basic（采集落库结果）；本地权威，不缓存。",
 )
 
+# daily_price：日行情（**含指数行**——code 形如 sh000300，无独立 index 表）。
+# 供 qe 因子/绩效/回测/数据质量 + backend 行情/指数条。
+DAILY_PRICE = DatasetSpec(
+    id="daily_price",
+    title="日行情（含指数行）",
+    kind="raw",
+    params=(
+        ParamSpec(name="codes", type="str",
+                  desc="代码白名单，逗号 IN（含指数 sh000300）；空=不限"),
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="date", type="date",
+                  desc="精确单日（给定时优先于 start/end）"),
+        ParamSpec(name="asof", type="date", desc="trade_date ≤ asof（取数锚）"),
+        ParamSpec(name="last", type="int",
+                  desc="每 code 取最近 N 行（服务端窗口；空=不限）"),
+        ParamSpec(name="fields", type="str",
+                  desc="列投影白名单，逗号；空=全列"),
+        ParamSpec(name="adj_not_null", type="bool",
+                  desc="仅返回 adj_factor 非空（最新因子锚点用）"),
+    ),
+    columns=(
+        ColumnSpec("code", "str", desc="代码"),
+        ColumnSpec("trade_date", "date", desc="交易日"),
+        ColumnSpec("open", "float"), ColumnSpec("high", "float"),
+        ColumnSpec("low", "float"), ColumnSpec("close", "float"),
+        ColumnSpec("volume", "int", desc="成交量（手）"),
+        ColumnSpec("amount", "float", desc="成交额（元）"),
+        ColumnSpec("adj_factor", "float", desc="复权因子"),
+        ColumnSpec("turnover_rate", "float", desc="换手率（%）"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 daily_price（含指数行）；本地权威，不缓存。",
+)
+
+# daily_valuation：日度估值（PE/PB/市值）。供 qe 因子/展示/信号 + backend 估值。
+DAILY_VALUATION = DatasetSpec(
+    id="daily_valuation",
+    title="日度估值",
+    kind="raw",
+    params=(
+        ParamSpec(name="codes", type="str", desc="代码白名单，逗号 IN；空=不限"),
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="asof", type="date", desc="trade_date ≤ asof（取数锚）"),
+        ParamSpec(name="last", type="int", desc="每 code 取最近 N 行；空=不限"),
+        ParamSpec(name="fields", type="str", desc="列投影白名单，逗号；空=全列"),
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("trade_date", "date"),
+        ColumnSpec("close", "float", desc="收盘价（元）"),
+        ColumnSpec("total_mv", "float", desc="总市值（元）"),
+        ColumnSpec("float_mv", "float", desc="流通市值（元）"),
+        ColumnSpec("pe_ttm", "float", desc="市盈率 TTM"),
+        ColumnSpec("pe_static", "float", desc="市盈率（静态）"),
+        ColumnSpec("pb", "float", desc="市净率"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 daily_valuation；本地权威，不缓存。",
+)
+
+# financial_indicator：财务指标（announce_date 防未来函数）。供 qe 因子/展示 + backend 财务。
+FINANCIAL_INDICATOR = DatasetSpec(
+    id="financial_indicator",
+    title="财务指标",
+    kind="raw",
+    params=(
+        ParamSpec(name="codes", type="str", desc="代码白名单，逗号 IN；空=不限"),
+        ParamSpec(name="as_of", type="date",
+                  desc="仅返回 announce_date ≤ as_of（防未来函数）"),
+        ParamSpec(name="last", type="int",
+                  desc="每 code 取最近 N 行（announce_date DESC, report_date DESC）"),
+        ParamSpec(name="fields", type="str", desc="列投影白名单，逗号；空=全列"),
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("report_date", "date", desc="报告期"),
+        ColumnSpec("announce_date", "date", desc="公告日（财报披露日）"),
+        ColumnSpec("pe", "float"), ColumnSpec("pb", "float"),
+        ColumnSpec("roe", "float", desc="净资产收益率"),
+        ColumnSpec("profit_growth", "float", desc="净利润增速"),
+        ColumnSpec("revenue_growth", "float", desc="营收增速"),
+        ColumnSpec("debt_ratio", "float", desc="资产负债率"),
+        ColumnSpec("gross_margin", "float", desc="毛利率"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 financial_indicator；本地权威，不缓存。",
+)
+
+# latest_trade_date：最新交易日（编排/就绪度）。避免客户端拉全表取 MAX。
+LATEST_TRADE_DATE = DatasetSpec(
+    id="latest_trade_date",
+    title="最新交易日",
+    kind="raw",
+    params=(
+        ParamSpec(name="table", type="enum",
+                  enum=("daily_price", "daily_valuation"), default="daily_price",
+                  desc="取哪个表的最新交易日"),
+        ParamSpec(name="exclude_index", type="bool", default=True,
+                  desc="是否排除指数行（code NOT LIKE 'sh%'）；默认 true"),
+    ),
+    columns=(ColumnSpec("trade_date", "date"),),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库最新 trade_date（MAX）；本地权威，不缓存。",
+)
+
+# market_ready：采集就绪闸门（池覆盖率 ≥ 阈值）。避免客户端拉 800 行自算。
+MARKET_READY = DatasetSpec(
+    id="market_ready",
+    title="采集就绪度",
+    kind="raw",
+    params=(
+        ParamSpec(name="date", type="date", desc="判定日（该日池覆盖率）"),
+        ParamSpec(name="threshold", type="str", default="0.9",
+                  desc="就绪阈值（默认 0.9）"),
+        ParamSpec(name="universe", type="str", default="hs300,zz500",
+                  desc="池白名单，逗号；默认 hs300,zz500"),
+    ),
+    columns=(
+        ColumnSpec("ready", "bool", desc="覆盖率 ≥ 阈值"),
+        ColumnSpec("covered", "int", desc="当日有行情的池内 code 数"),
+        ColumnSpec("total", "int", desc="池内 code 总数"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库池就绪度；本地权威，不缓存。",
+)
+
+# dup_keys：重复键检查（供 data_quality._check_duplicates）。datahub 有 UNIQUE 索引 → 恒空。
+DUP_KEYS = DatasetSpec(
+    id="dup_keys",
+    title="重复键检查",
+    kind="raw",
+    params=(
+        ParamSpec(name="table", type="enum",
+                  enum=("daily_price", "daily_valuation", "financial_indicator"),
+                  default="daily_price", desc="检查哪张表"),
+    ),
+    columns=(
+        ColumnSpec("key", "str", desc="重复键（code|trade_date 或 code|report_date）"),
+        ColumnSpec("n", "int", desc="重复条数（>1）"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库重复唯一键组（UNIQUE 索引下恒空）；本地权威，不缓存。",
+)
+
 RAW_DATASETS: tuple[DatasetSpec, ...] = (
     TRADE_CALENDAR,
     STOCK_BASIC,
+    DAILY_PRICE,
+    DAILY_VALUATION,
+    FINANCIAL_INDICATOR,
+    LATEST_TRADE_DATE,
+    MARKET_READY,
+    DUP_KEYS,
 )
