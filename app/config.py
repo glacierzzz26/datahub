@@ -47,12 +47,10 @@ _DEFAULT_MCP_ALLOWED_HOSTS = "localhost,localhost:*,127.0.0.1,127.0.0.1:*"
 MCP_ALLOWED_HOSTS = _list("DATAHUB_MCP_ALLOWED_HOSTS", _DEFAULT_MCP_ALLOWED_HOSTS)
 
 # ---------- 请求层超时（沿用 collector 口径）----------
-HTTP_CONNECT_TIMEOUT = _float("DATAHUB_HTTP_CONNECT_TIMEOUT", 5)
-HTTP_READ_TIMEOUT = _float("DATAHUB_HTTP_READ_TIMEOUT", 15)
-# with_timeout 兜底网超时（口径不变式：HTTP_READ_TIMEOUT ≤ REQUEST_TIMEOUT）
+# 请求层超时补丁（connect/read 与杀开关）见 providers/net.py：env 在 install 时读取
+# （不依赖 import config，便于运维当日调参不重建），故此处不重复定义常量。
+# with_timeout 兜底网超时（口径不变式：net.py 的 read 超时 ≤ REQUEST_TIMEOUT）
 REQUEST_TIMEOUT = _int("DATAHUB_REQUEST_TIMEOUT", 15)
-# 杀开关：置 0 硬旁路请求层补丁（当日回滚，无需重建）。默认开。
-HTTP_TIMEOUT_PATCH = _bool("DATAHUB_HTTP_TIMEOUT_PATCH", True)
 
 # ---------- 缓存 / 限流 ----------
 CACHE_TTL_DEFAULT = _int("DATAHUB_CACHE_TTL_DEFAULT", 300)
