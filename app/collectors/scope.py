@@ -20,8 +20,7 @@ from app.models.tables import StockBasic
 
 logger = logging.getLogger(__name__)
 
-# COLLECT_SCOPE 取值
-SCOPE_POOL = "pool"
+# COLLECT_SCOPE 取值（默认/兜底分支即 "pool"，故不再具名常量）
 SCOPE_A_SHARE = "a_share"
 
 # 策略选股域（与 factor_service.pool_codes() 同字面量；此处只用于默认分支）
