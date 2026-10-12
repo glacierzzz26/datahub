@@ -69,6 +69,11 @@
   不发外部请求）；② **不缓存**（`ttl_seconds=None`）——本地库权威且廉价，无 stale 兜底；
   ③ **空结果是合法值**（库内确无 = 尚未采集），**不**转 503——这是 external「空即失败」
   的反例。
+- **数值列以 JSON 数字返回**（不是字符串）：`ColumnSpec` 声明为 `float`/`int` 的列，wire 一律是
+  JSON number —— ORM 的 `Decimal` 已在 `providers/db.py::_project` 归一到 `float`（`int` 列保持整数）。
+  契约依据 `app/datasets/spec.py::ColumnSpec.type`；消费方（Go `float64` DTO 等）据此直接反序列化，
+  **勿**依赖 `Decimal` → JSON 字符串的旧形态（pydantic v2 默认行为，已废弃）。
+
 - 由 `providers/db.py`（`name="db"`）实现；HTTP `/v1/datasets` 与 MCP tool
   （`trade_calendar`）按注册表**机械自动出现**。`is_open` 默认 true → 只返回交易日；
   传 `is_open=false` 返回全部日历日。

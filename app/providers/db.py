@@ -10,6 +10,7 @@
 """
 import logging
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -137,9 +138,23 @@ _FINANCIAL_COLS = ("code", "report_date", "announce_date", "pe", "pb", "roe",
 
 
 def _project(rows, fields: list[str], all_cols: tuple[str, ...]) -> list[dict]:
-    """按 fields 投影（保持 all_cols 声明序，忽略未知列）；fields 空 → 全列。"""
+    """按 fields 投影（保持 all_cols 声明序，忽略未知列）；fields 空 → 全列。
+
+    **数值列归一为 `float`**：`NUMERIC` 列经 ORM 映射成 `Decimal`，而 pydantic v2 会把
+    `Decimal` 序列化成 JSON **字符串**（保精度）——这与 `ColumnSpec` 声明的 `float`
+    类型不符，且让 Go 侧 `float64` DTO 反序列化直接失败
+    （`json: cannot unmarshal string into float64`）。故此处按契约把 `Decimal` 转
+    `float`（`int` 列 ORM 本就是 `int`，不动）。
+    """
     wanted = [c for c in all_cols if not fields or c in fields]
-    return [{k: getattr(r, k) for k in wanted} for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        row: dict = {}
+        for k in wanted:
+            v = getattr(r, k)
+            row[k] = float(v) if isinstance(v, Decimal) else v
+        out.append(row)
+    return out
 
 
 def _apply_last(q, model, order_by, last: int):
