@@ -149,6 +149,18 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   > 故 datahub **采集落库的日历默认只有近 2 年**，远窄于 steady 全史（1990→今）。**Phase 3 读切换前
   > 必须补齐全史**——走 AkShare 路径 `ak.tool_trade_date_hist_sina()`（新浪源返回**全部交易日**）
   > 一次性 upsert（PK `cal_date` 幂等，与 BaoStock 近端窗无冲突），再 `--all` 对账零偏差方可翻闸。
+- **历史底种（直接库拷贝）**：`./scripts/seed_from_steady.sh` ——datahub 库与 steady 库
+  **同处一个 PG 实例**（容器 `quant-postgres`），故历史全量走 `pg_dump --data-only | psql`
+  直接拷贝（**逐位精确、分钟级、零漂移**），不做逐股回采。脚本幂等：① `TRUNCATE <表…> CASCADE`
+  （**只动目标库**）；② **FK 顺序**先 `stock_basic`（含 `market='INDEX'` 伪行）再三张子表，
+  逐表 `pg_dump --data-only --no-owner --table=public.<t>`（COPY **显式列名**，抗列序漂移）→ `psql`；
+  ③ 三张 BIGSERIAL 表 `setval(…, MAX(id)+1, false)`（漏做则后续采集 insert 主键冲突）。
+  `DRY_RUN=1` 仅回显；`SEED_TABLES` 可覆盖表集。**不拷贝** `trade_calendar`（已底种）。
+- **按表对账（全数据集切换放行门）**：`python scripts/reconcile_table.py --table <t>
+  --key <cols> --vals <cols> [--date-col <t>] [--limit N | --all] [--end YYYY-MM-DD]
+  [--numeric-tol col:tol,…] [--mode copy|recollect]` ——把 calendar 对账泛化为按表逐位比对
+  （双引擎、锚定 `--end`、同五类分类）。`--mode copy`（默认，容差恒 0）验**底种逐位全等**；
+  `--mode recollect`（允许 `--numeric-tol`）验**回采**产物。有非 `accepted` → 退出码 1。
 - **DB 环境变量**：`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（默认库名 `datahub`）。
   容器内 `DB_HOST=quant-postgres`——datahub 双服务**加入 PG 所在 docker 网络**（`networks.pg`，
   默认 `steady-20260821-c8d0651_default`，`STEADY_NETWORK` 可覆盖），按 PG **容器名**连；
@@ -239,7 +251,9 @@ deploy/
 scripts/
 ├── init-db.sh         # 一次性建库（CREATE DATABASE + 施加 init.sql）
 ├── migrate.sh         # 迁移应用 + --check 列漂移检测
-└── reconcile_calendar.py  # calendar 对账（datahub vs steady 逐位比对，切换放行门）
+├── seed_from_steady.sh    # 历史底种（同实例 pg_dump|psql 直接库拷贝 + setval）
+├── reconcile_calendar.py  # calendar 对账（datahub vs steady 逐位比对，切换放行门）
+└── reconcile_table.py     # 按表对账（泛化：--table/--key/--vals/--mode copy|recollect）
 ```
 
 ---
