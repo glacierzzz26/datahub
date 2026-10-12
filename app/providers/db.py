@@ -11,11 +11,17 @@
 import logging
 from datetime import date
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import db
-from app.models.tables import StockBasic, TradeCalendar
+from app.models.tables import (
+    DailyPrice,
+    DailyValuation,
+    FinancialIndicator,
+    StockBasic,
+    TradeCalendar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,22 @@ def _as_date(value: object) -> date | None:
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value))
+
+
+def _as_int(value: object) -> int | None:
+    """转 int（空 → None）。`last`/`limit` 等正整数参数用。"""
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    """转 bool（空 → default）。HTTP query 传 "" / "true" / "1" 等。"""
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _split_csv(value: object) -> list[str]:
@@ -101,10 +123,158 @@ def _stock_basic(session: Session, params: dict) -> list[dict]:
     ]
 
 
+# ---------- 三张价格/财务表 + 小数据集（Phase 3）----------
+#
+# 通用：codes 逗号 IN；start/end 区间；date 精确单日；asof 上界；last 每 code 最近 N 行
+# （服务端 ROW_NUMBER，把窗口/聚合读点变有界批量）；fields 列投影（保持声明序）。
+
+_PRICE_COLS = ("code", "trade_date", "open", "high", "low", "close", "volume",
+               "amount", "adj_factor", "turnover_rate")
+_VALUATION_COLS = ("code", "trade_date", "close", "total_mv", "float_mv",
+                   "pe_ttm", "pe_static", "pb")
+_FINANCIAL_COLS = ("code", "report_date", "announce_date", "pe", "pb", "roe",
+                   "profit_growth", "revenue_growth", "debt_ratio", "gross_margin")
+
+
+def _project(rows, fields: list[str], all_cols: tuple[str, ...]) -> list[dict]:
+    """按 fields 投影（保持 all_cols 声明序，忽略未知列）；fields 空 → 全列。"""
+    wanted = [c for c in all_cols if not fields or c in fields]
+    return [{k: getattr(r, k) for k in wanted} for r in rows]
+
+
+def _apply_last(q, model, order_by, last: int):
+    """每 code 最近 N 行：内层 `ROW_NUMBER() OVER (PARTITION BY code ORDER BY <order_by>)`，
+    外层 join 回取 `rn <= last`。把「每码最新一条 / top-2 / 21 根窗」变成有界批量。"""
+    rn = func.row_number().over(partition_by=model.code, order_by=order_by).label("rn")
+    sub = q.with_entities(model.id, rn).subquery()
+    return q.join(sub, model.id == sub.c.id).filter(sub.c.rn <= last)
+
+
+def _daily_price(session: Session, params: dict) -> list[dict]:
+    """日行情（含指数行）：codes IN、start/end 区间、date 精确、asof 上界、
+    adj_not_null、last 窗口、fields 投影。升序（code, trade_date）。"""
+    q = session.query(DailyPrice)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(DailyPrice.code.in_(codes))
+    exact = _as_date(params.get("date"))
+    if exact is not None:
+        q = q.filter(DailyPrice.trade_date == exact)
+    else:
+        start = _as_date(params.get("start"))
+        end = _as_date(params.get("end"))
+        if start is not None:
+            q = q.filter(DailyPrice.trade_date >= start)
+        if end is not None:
+            q = q.filter(DailyPrice.trade_date <= end)
+    asof = _as_date(params.get("asof"))
+    if asof is not None:
+        q = q.filter(DailyPrice.trade_date <= asof)
+    if _as_bool(params.get("adj_not_null")):
+        q = q.filter(DailyPrice.adj_factor.isnot(None))
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, DailyPrice, [DailyPrice.trade_date.desc()], last)
+    q = q.order_by(DailyPrice.code, DailyPrice.trade_date)
+    return _project(q.all(), _split_csv(params.get("fields")), _PRICE_COLS)
+
+
+def _daily_valuation(session: Session, params: dict) -> list[dict]:
+    q = session.query(DailyValuation)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(DailyValuation.code.in_(codes))
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(DailyValuation.trade_date >= start)
+    if end is not None:
+        q = q.filter(DailyValuation.trade_date <= end)
+    asof = _as_date(params.get("asof"))
+    if asof is not None:
+        q = q.filter(DailyValuation.trade_date <= asof)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, DailyValuation, [DailyValuation.trade_date.desc()], last)
+    q = q.order_by(DailyValuation.code, DailyValuation.trade_date)
+    return _project(q.all(), _split_csv(params.get("fields")), _VALUATION_COLS)
+
+
+def _financial_indicator(session: Session, params: dict) -> list[dict]:
+    """财务指标：codes IN、as_of（announce_date ≤，防未来函数）、last 窗口、fields。"""
+    q = session.query(FinancialIndicator)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(FinancialIndicator.code.in_(codes))
+    as_of = _as_date(params.get("as_of"))
+    if as_of is not None:
+        q = q.filter(FinancialIndicator.announce_date <= as_of)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, FinancialIndicator,
+                        [FinancialIndicator.announce_date.desc(),
+                         FinancialIndicator.report_date.desc()], last)
+    q = q.order_by(FinancialIndicator.code, FinancialIndicator.report_date)
+    return _project(q.all(), _split_csv(params.get("fields")), _FINANCIAL_COLS)
+
+
+def _latest_trade_date(session: Session, params: dict) -> list[dict]:
+    """最新交易日（MAX）。`exclude_index` 默认 true（qe 口径 `code NOT LIKE 'sh%'`）；
+    backend `GetLatestTradeDate` 不过滤 → 传 false。空 → `[]`（合法值）。"""
+    model = DailyValuation if params.get("table") == "daily_valuation" else DailyPrice
+    q = session.query(func.max(model.trade_date))
+    if _as_bool(params.get("exclude_index"), default=True):
+        q = q.filter(~model.code.like("sh%"))
+    d = q.scalar()
+    return [{"trade_date": d}] if d else []
+
+
+def _market_ready(session: Session, params: dict) -> list[dict]:
+    """池就绪度：池内 code 数 `total`，当日有行情者 `covered`，覆盖率 ≥ 阈值 → ready。
+    对齐 qe `tasks.market_ready`（池 = `universe IN (...)`，阈值默认 0.9）。"""
+    universes = _split_csv(params.get("universe")) or ["hs300", "zz500"]
+    threshold = float(params.get("threshold") or 0.9)
+    d = _as_date(params.get("date"))
+    pool_codes = [c for (c,) in session.query(StockBasic.code)
+                  .filter(StockBasic.universe.in_(universes)).all()]
+    total = len(pool_codes)
+    covered = 0
+    if d is not None and total:
+        covered = (session.query(func.count(func.distinct(DailyPrice.code)))
+                   .filter(DailyPrice.trade_date == d,
+                           DailyPrice.code.in_(pool_codes)).scalar()) or 0
+    ready = total > 0 and covered / total >= threshold
+    return [{"ready": ready, "covered": covered, "total": total}]
+
+
+_DUP_KEYS = {
+    "daily_price": (DailyPrice, (DailyPrice.code, DailyPrice.trade_date)),
+    "daily_valuation": (DailyValuation, (DailyValuation.code, DailyValuation.trade_date)),
+    "financial_indicator": (FinancialIndicator,
+                            (FinancialIndicator.code, FinancialIndicator.report_date)),
+}
+
+
+def _dup_keys(session: Session, params: dict) -> list[dict]:
+    """重复唯一键组（>1 条）。datahub 有 UNIQUE 索引 → 恒空；作为「零重复」断言。
+    对齐 qe `data_quality._check_duplicates`（价格/估值用 trade_date，财务用 report_date）。"""
+    model, key_cols = _DUP_KEYS.get(params.get("table") or "daily_price",
+                                    _DUP_KEYS["daily_price"])
+    rows = (session.query(*key_cols, func.count())
+            .group_by(*key_cols).having(func.count() > 1).all())
+    return [{"key": "|".join(str(v) for v in r[:-1]), "n": r[-1]} for r in rows]
+
+
 # dataset id → 查询函数（新增 raw 数据集在此登记）
 _FETCHERS = {
     "trade_calendar": _trade_calendar,
     "stock_basic": _stock_basic,
+    "daily_price": _daily_price,
+    "daily_valuation": _daily_valuation,
+    "financial_indicator": _financial_indicator,
+    "latest_trade_date": _latest_trade_date,
+    "market_ready": _market_ready,
+    "dup_keys": _dup_keys,
 }
 
 

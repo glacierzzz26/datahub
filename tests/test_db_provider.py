@@ -173,3 +173,165 @@ def test_stock_basic_pagination(stock_session):
 def test_stock_basic_unknown_sort_falls_back_to_code(stock_session):
     rows = db_provider.fetch("stock_basic", {"sort": "drop_table"})
     assert [r["code"] for r in rows] == ["000001", "600000", "600519", "920000"]
+
+
+# ---------- daily_price / daily_valuation / financial_indicator（Phase 3） ----------
+
+from app.models.tables import (  # noqa: E402
+    DailyPrice,
+    DailyValuation,
+    FinancialIndicator,
+)
+
+
+@pytest.fixture
+def price_session(monkeypatch):
+    """内存 SQLite 建三张价格/财务真表，真跑过滤/窗口/投影。"""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    for m in (StockBasic, DailyPrice, DailyValuation, FinancialIndicator):
+        m.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    s = factory()
+    s.add_all([
+        StockBasic(code="600000", name="浦发", market="SH", universe="hs300",
+                   data_scope="a_share"),
+        StockBasic(code="600519", name="茅台", market="SH", universe="hs300",
+                   data_scope="a_share"),
+        # 行情：600000 三日 + 指数 sh000300 两日；600000 首日 adj_factor 为空
+        DailyPrice(id=1, code="600000", trade_date=date(2026, 1, 2), close=10.0,
+                   adj_factor=None),
+        DailyPrice(id=2, code="600000", trade_date=date(2026, 1, 3), close=10.5,
+                   adj_factor=1.2),
+        DailyPrice(id=3, code="600000", trade_date=date(2026, 1, 5), close=11.0,
+                   adj_factor=1.2),
+        DailyPrice(id=4, code="sh000300", trade_date=date(2026, 1, 2), close=4000.0),
+        DailyPrice(id=5, code="sh000300", trade_date=date(2026, 1, 3), close=4010.0),
+        # 估值：600000 两日
+        DailyValuation(id=1, code="600000", trade_date=date(2026, 1, 2), close=10.0,
+                       pe_ttm=8.0, pb=1.1),
+        DailyValuation(id=2, code="600000", trade_date=date(2026, 1, 3), close=10.5,
+                       pe_ttm=8.2, pb=1.2),
+        # 财务：600000 两期（含公告日）
+        FinancialIndicator(id=1, code="600000", report_date=date(2025, 9, 30),
+                           announce_date=date(2025, 10, 20), roe=9.0),
+        FinancialIndicator(id=2, code="600000", report_date=date(2025, 12, 31),
+                           announce_date=date(2026, 1, 25), roe=9.5),
+    ])
+    s.commit()
+    s.close()
+    monkeypatch.setattr(db_provider.db, "get_session", lambda: factory())
+    return factory
+
+
+def test_daily_price_range_asc_and_full_columns(price_session):
+    rows = db_provider.fetch("daily_price",
+                             {"codes": "600000", "start": "2026-01-02",
+                              "end": "2026-01-05"})
+    assert [(r["code"], r["trade_date"]) for r in rows] == [
+        ("600000", date(2026, 1, 2)), ("600000", date(2026, 1, 3)),
+        ("600000", date(2026, 1, 5))]
+    assert set(rows[0]) == set(db_provider._PRICE_COLS)
+
+
+def test_daily_price_exact_date(price_session):
+    rows = db_provider.fetch("daily_price", {"date": "2026-01-03"})
+    assert sorted(r["code"] for r in rows) == ["600000", "sh000300"]
+
+
+def test_daily_price_last_window_per_code(price_session):
+    # 每 code 最近 2 行：600000 → 01-03,01-05；sh000300 → 01-02,01-03
+    rows = db_provider.fetch("daily_price", {"last": 2})
+    by = {}
+    for r in rows:
+        by.setdefault(r["code"], []).append(r["trade_date"])
+    assert by["600000"] == [date(2026, 1, 3), date(2026, 1, 5)]
+    assert by["sh000300"] == [date(2026, 1, 2), date(2026, 1, 3)]
+
+
+def test_daily_price_asof_and_fields_projection(price_session):
+    rows = db_provider.fetch("daily_price",
+                             {"codes": "600000", "asof": "2026-01-03",
+                              "fields": "trade_date,close"})
+    assert rows == [{"code": "600000", "trade_date": date(2026, 1, 2), "close": 10.0},
+                    {"code": "600000", "trade_date": date(2026, 1, 3), "close": 10.5}] \
+        or rows == [{"trade_date": date(2026, 1, 2), "close": 10.0},
+                    {"trade_date": date(2026, 1, 3), "close": 10.5}]
+
+
+def test_daily_price_adj_not_null(price_session):
+    rows = db_provider.fetch("daily_price",
+                             {"codes": "600000", "adj_not_null": True,
+                              "last": 1})
+    assert len(rows) == 1 and rows[0]["trade_date"] == date(2026, 1, 5)
+    assert float(rows[0]["adj_factor"]) == 1.2
+
+
+def test_daily_price_empty_is_legal(price_session):
+    assert db_provider.fetch("daily_price", {"codes": "999999"}) == []
+
+
+def test_daily_valuation_last_one(price_session):
+    rows = db_provider.fetch("daily_valuation", {"codes": "600000", "last": 1})
+    assert len(rows) == 1
+    assert rows[0]["trade_date"] == date(2026, 1, 3) and float(rows[0]["pe_ttm"]) == 8.2
+
+
+def test_daily_valuation_asof(price_session):
+    rows = db_provider.fetch("daily_valuation",
+                             {"codes": "600000", "asof": "2026-01-02"})
+    assert [r["trade_date"] for r in rows] == [date(2026, 1, 2)]
+
+
+def test_financial_as_of_guards_future(price_session):
+    # as_of=2025-12-31 → 只暴露 2025-10-20 公告的那期（01-25 公告的不给）
+    rows = db_provider.fetch("financial_indicator",
+                             {"codes": "600000", "as_of": "2025-12-31"})
+    assert [r["report_date"] for r in rows] == [date(2025, 9, 30)]
+
+
+def test_financial_last_window_announce_desc(price_session):
+    rows = db_provider.fetch("financial_indicator", {"codes": "600000", "last": 1})
+    assert len(rows) == 1 and rows[0]["report_date"] == date(2025, 12, 31)
+
+
+def test_latest_trade_date_excludes_index_by_default(price_session):
+    # sh000300 有 01-03，但 600000 有 01-05 → 默认排除指数 → 01-05
+    rows = db_provider.fetch("latest_trade_date", {})
+    assert rows == [{"trade_date": date(2026, 1, 5)}]
+
+
+def test_latest_trade_date_include_index(price_session):
+    rows = db_provider.fetch("latest_trade_date", {"exclude_index": False})
+    assert rows == [{"trade_date": date(2026, 1, 5)}]
+
+
+def test_latest_trade_date_no_rows_is_empty(monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    DailyPrice.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(db_provider.db, "get_session", lambda: factory())
+    assert db_provider.fetch("latest_trade_date", {}) == []
+
+
+def test_market_ready_ratio(price_session):
+    # 池 2 只（600000,600519），当日仅 600000 有行情 → covered=1/total=2=0.5 < 0.9
+    rows = db_provider.fetch("market_ready", {"date": "2026-01-03", "threshold": "0.9"})
+    assert rows == [{"ready": False, "covered": 1, "total": 2}]
+    # 阈值下调 → ready
+    rows = db_provider.fetch("market_ready", {"date": "2026-01-03", "threshold": "0.5"})
+    assert rows[0]["ready"] is True
+
+
+def test_dup_keys_empty_when_unique(price_session):
+    assert db_provider.fetch("dup_keys", {"table": "daily_price"}) == []
+
+
+def test_dup_keys_detects_duplicate(price_session):
+    s = price_session()
+    s.add(DailyPrice(id=99, code="600000", trade_date=date(2026, 1, 5), close=11.0))
+    s.commit()
+    s.close()
+    rows = db_provider.fetch("dup_keys", {"table": "daily_price"})
+    assert rows == [{"key": "600000|2026-01-05", "n": 2}]
