@@ -235,13 +235,33 @@ def _financial_indicator(session: Session, params: dict) -> list[dict]:
 
 def _latest_trade_date(session: Session, params: dict) -> list[dict]:
     """最新交易日（MAX）。`exclude_index` 默认 true（qe 口径 `code NOT LIKE 'sh%'`）；
-    backend `GetLatestTradeDate` 不过滤 → 传 false。空 → `[]`（合法值）。"""
+    backend `GetLatestTradeDate` 不过滤 → 传 false。`before` 给定时取 `trade_date < before`
+    的最近一日（严格小于；qe data_quality 的 prev 推导用）。空 → `[]`（合法值）。"""
     model = DailyValuation if params.get("table") == "daily_valuation" else DailyPrice
     q = session.query(func.max(model.trade_date))
     if _as_bool(params.get("exclude_index"), default=True):
         q = q.filter(~model.code.like("sh%"))
+    before = _as_date(params.get("before"))
+    if before is not None:
+        q = q.filter(model.trade_date < before)
     d = q.scalar()
     return [{"trade_date": d}] if d else []
+
+
+def _daily_price_days(session: Session, params: dict) -> list[dict]:
+    """区间内「有行情的交易日」去重列表（升序）。`exclude_index` 默认 true（qe 口径
+    `code NOT LIKE 'sh%'`）。空 → `[]`（合法值）。供 data_quality._check_missing_days。"""
+    q = session.query(DailyPrice.trade_date).distinct()
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(DailyPrice.trade_date >= start)
+    if end is not None:
+        q = q.filter(DailyPrice.trade_date <= end)
+    if _as_bool(params.get("exclude_index"), default=True):
+        q = q.filter(~DailyPrice.code.like("sh%"))
+    q = q.order_by(DailyPrice.trade_date)
+    return [{"trade_date": d} for (d,) in q.all()]
 
 
 def _market_ready(session: Session, params: dict) -> list[dict]:
@@ -288,6 +308,7 @@ _FETCHERS = {
     "daily_valuation": _daily_valuation,
     "financial_indicator": _financial_indicator,
     "latest_trade_date": _latest_trade_date,
+    "daily_price_days": _daily_price_days,
     "market_ready": _market_ready,
     "dup_keys": _dup_keys,
 }

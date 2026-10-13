@@ -12,6 +12,10 @@
   **原始数据读取已切到 datahub**、**steady 采集全停** ⇒ datahub 为**唯一采集方**。
   生产切换记录见 steady 仓 `docs/phase2/stages/datahub-phase3-生产切换runbook.md` §5。
   遗留：steady 侧 Tier3 读点（`backtest/engine` 等）仍读本地冻结副本（Phase 4 重构）、过渡期告警断链。
+- **Phase 4（进行中，2026-10-13 起）**：配合 steady 把 Tier3 读点迁出本地冻结 `daily_price`。
+  本仓增补：`latest_trade_date` 加 `before` 参数（严格 `<`）、新增小数据集 `daily_price_days`
+  （区间内有行情的交易日 DISTINCT 列表），供 qe `data_quality` 的 prev 推导 / `_check_missing_days`
+  脱离本地冻结副本。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -57,7 +61,8 @@
 | `daily_price` | raw | `codes`(逗号 IN，**含指数** sh000300), `start`,`end`,`date`(精确), `asof`(≤), `last`(每码最近 N), `fields`(列投影), `adj_not_null` | code, trade_date, open, high, low, close, volume, amount, adj_factor, turnover_rate | 不缓存 |
 | `daily_valuation` | raw | `codes`, `start`,`end`, `asof`, `last`, `fields` | code, trade_date, close, total_mv, float_mv, pe_ttm, pe_static, pb | 不缓存 |
 | `financial_indicator` | raw | `codes`, `as_of`(announce_date≤，防未来函数), `last`, `fields` | code, report_date, announce_date, pe, pb, roe, profit_growth, revenue_growth, debt_ratio, gross_margin | 不缓存 |
-| `latest_trade_date` | raw | `table`(daily_price/daily_valuation), `exclude_index`(bool,默认 true) | trade_date | 不缓存 |
+| `latest_trade_date` | raw | `table`(daily_price/daily_valuation), `exclude_index`(bool,默认 true), `before`(trade_date < 严格小于) | trade_date | 不缓存 |
+| `daily_price_days` | raw | `start`,`end`(区间), `exclude_index`(bool,默认 true) | trade_date(有行情的交易日，DISTINCT 升序) | 不缓存 |
 | `market_ready` | raw | `date`, `threshold`(默认 0.9), `universe`(默认 hs300,zz500) | ready, covered, total | 不缓存 |
 | `dup_keys` | raw | `table`(daily_price/daily_valuation/financial_indicator) | key, n | 不缓存 |
 
