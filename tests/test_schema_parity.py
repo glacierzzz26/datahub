@@ -15,8 +15,8 @@ HERE = Path(__file__).parent
 FIXTURE = HERE / "fixtures" / "steady_raw_schema.sql"
 INIT_SQL = HERE.parent / "deploy" / "postgres" / "init.sql"
 
-# datahub 自有库**只**承载这些原始表（不含 factor_*/strategy_*/account*/… 计算表）
-RAW_TABLES = {
+# steady 镜像原始表：datahub 逐字对齐 steady 冻结副本（seed/对账可比的前提）
+STEADY_MIRRORED_TABLES = {
     "stock_basic",
     "daily_price",
     "financial_indicator",
@@ -25,6 +25,15 @@ RAW_TABLES = {
     "market_hotspot",
     "task_run",
 }
+
+# datahub **自有**原始表（非 steady 镜像，无冻结副本可比）：逐字 parity 不适用，
+# 仅要求与 ORM 对齐（见 test_orm_matches_ddl.py）。承载 research 侧补口（如 net_margin）。
+DATAHUB_OWNED_TABLES = {
+    "financial_indicator_ext",
+}
+
+# 兼容旧名：datahub 自有库承载的全部原始表（不含 factor_*/strategy_*/account*/… 计算表）
+RAW_TABLES = STEADY_MIRRORED_TABLES | DATAHUB_OWNED_TABLES
 
 
 def _collapse(path: Path) -> str:
@@ -101,27 +110,37 @@ def test_files_exist():
 
 def test_datahub_init_contains_only_raw_tables():
     tables, _, _ = parse_schema(INIT_SQL)
-    assert set(tables) == RAW_TABLES, (
-        f"init.sql 表集合应恰为原始表；多出 {set(tables) - RAW_TABLES}，"
-        f"缺少 {RAW_TABLES - set(tables)}"
+    expected = STEADY_MIRRORED_TABLES | DATAHUB_OWNED_TABLES
+    assert set(tables) == expected, (
+        f"init.sql 表集合应恰为原始表（steady 镜像 + datahub 自有）；多出 "
+        f"{set(tables) - expected}，缺少 {expected - set(tables)}"
     )
 
 
 def test_fixture_contains_only_raw_tables():
+    """冻结副本只含 **steady 镜像** 表——datahub 自有表不在 steady 侧，无副本。"""
     tables, _, _ = parse_schema(FIXTURE)
-    assert set(tables) == RAW_TABLES
+    assert set(tables) == STEADY_MIRRORED_TABLES
+
+
+def _subset(d: dict, names: set) -> dict:
+    """只取属于 names 的条目（用于把 init.sql 与 steady 冻结副本的比对限制在镜像表）。"""
+    return {k: v for k, v in d.items() if (k[0] if isinstance(k, tuple) else k) in names}
 
 
 def test_columns_match_fixture():
     init_t, _, _ = parse_schema(INIT_SQL)
     fix_t, _, _ = parse_schema(FIXTURE)
-    assert init_t == fix_t, "列名/类型/约束签名与 steady 冻结副本漂移"
+    assert _subset(init_t, STEADY_MIRRORED_TABLES) == fix_t, (
+        "列名/类型/约束签名与 steady 冻结副本漂移（仅比对 steady 镜像表）"
+    )
 
 
 def test_unique_constraints_match_fixture():
     _, init_u, _ = parse_schema(INIT_SQL)
     _, fix_u, _ = parse_schema(FIXTURE)
-    assert init_u == fix_u, f"唯一约束漂移：datahub={init_u} steady={fix_u}"
+    init_u_mirror = {(t, cols) for (t, cols) in init_u if t in STEADY_MIRRORED_TABLES}
+    assert init_u_mirror == fix_u, f"唯一约束漂移：datahub={init_u_mirror} steady={fix_u}"
     # 表级唯一约束（task_run 的幂等键）
     assert ("task_run", ("task_name", "run_date")) in init_u
 
@@ -138,7 +157,8 @@ def test_key_unique_indexes_present():
 def test_indexes_match_fixture():
     _, _, init_i = parse_schema(INIT_SQL)
     _, _, fix_i = parse_schema(FIXTURE)
-    assert init_i == fix_i, f"索引漂移：datahub={init_i} steady={fix_i}"
+    init_i_mirror = {ix for ix in init_i if ix[1] in STEADY_MIRRORED_TABLES}
+    assert init_i_mirror == fix_i, f"索引漂移：datahub={init_i_mirror} steady={fix_i}"
     names = {name for name, *_ in init_i}
     assert {"uq_daily_price_code_date", "idx_daily_price_trade_date",
             "uq_daily_valuation_code_date", "uq_financial_code_report",

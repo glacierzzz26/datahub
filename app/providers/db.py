@@ -12,7 +12,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app import db
@@ -20,6 +20,7 @@ from app.models.tables import (
     DailyPrice,
     DailyValuation,
     FinancialIndicator,
+    FinancialIndicatorExt,
     StockBasic,
     TradeCalendar,
 )
@@ -134,7 +135,8 @@ _PRICE_COLS = ("code", "trade_date", "open", "high", "low", "close", "volume",
 _VALUATION_COLS = ("code", "trade_date", "close", "total_mv", "float_mv",
                    "pe_ttm", "pe_static", "pb")
 _FINANCIAL_COLS = ("code", "report_date", "announce_date", "pe", "pb", "roe",
-                   "profit_growth", "revenue_growth", "debt_ratio", "gross_margin")
+                   "profit_growth", "revenue_growth", "debt_ratio", "gross_margin",
+                   "net_margin")
 
 
 def _project(rows, fields: list[str], all_cols: tuple[str, ...]) -> list[dict]:
@@ -216,8 +218,22 @@ def _daily_valuation(session: Session, params: dict) -> list[dict]:
 
 
 def _financial_indicator(session: Session, params: dict) -> list[dict]:
-    """财务指标：codes IN、as_of（announce_date ≤，防未来函数）、last 窗口、fields。"""
-    q = session.query(FinancialIndicator)
+    """财务指标 + 侧表 net_margin：codes IN、as_of（announce_date ≤，防未来函数）、
+    last 窗口、fields 投影（含 net_margin）。
+
+    net_margin 来自 datahub 自有侧表 `financial_indicator_ext`（steady 镜像表无此列），
+    按 (code, report_date) left-join；未采集到该行时 net_margin=NULL（合法）。
+    """
+    q = (
+        session.query(FinancialIndicator, FinancialIndicatorExt.net_margin)
+        .outerjoin(
+            FinancialIndicatorExt,
+            and_(
+                FinancialIndicatorExt.code == FinancialIndicator.code,
+                FinancialIndicatorExt.report_date == FinancialIndicator.report_date,
+            ),
+        )
+    )
     codes = _split_csv(params.get("codes"))
     if codes:
         q = q.filter(FinancialIndicator.code.in_(codes))
@@ -230,7 +246,19 @@ def _financial_indicator(session: Session, params: dict) -> list[dict]:
                         [FinancialIndicator.announce_date.desc(),
                          FinancialIndicator.report_date.desc()], last)
     q = q.order_by(FinancialIndicator.code, FinancialIndicator.report_date)
-    return _project(q.all(), _split_csv(params.get("fields")), _FINANCIAL_COLS)
+    fields = _split_csv(params.get("fields"))
+    wanted = [c for c in _FINANCIAL_COLS if not fields or c in fields]
+    out: list[dict] = []
+    for fi, net_margin in q.all():
+        vals = {
+            "code": fi.code, "report_date": fi.report_date, "announce_date": fi.announce_date,
+            "pe": fi.pe, "pb": fi.pb, "roe": fi.roe, "profit_growth": fi.profit_growth,
+            "revenue_growth": fi.revenue_growth, "debt_ratio": fi.debt_ratio,
+            "gross_margin": fi.gross_margin, "net_margin": net_margin,
+        }
+        out.append({k: (float(vals[k]) if isinstance(vals[k], Decimal) else vals[k])
+                    for k in wanted})
+    return out
 
 
 def _latest_trade_date(session: Session, params: dict) -> list[dict]:

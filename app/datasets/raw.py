@@ -166,10 +166,12 @@ FINANCIAL_INDICATOR = DatasetSpec(
         ColumnSpec("revenue_growth", "float", desc="营收增速"),
         ColumnSpec("debt_ratio", "float", desc="资产负债率"),
         ColumnSpec("gross_margin", "float", desc="毛利率"),
+        ColumnSpec("net_margin", "float",
+                   desc="销售净利率（datahub 侧表 financial_indicator_ext；未采集时 null）"),
     ),
     ttl_seconds=None,
     source="db",
-    desc="读自有库 financial_indicator；本地权威，不缓存。",
+    desc="读自有库 financial_indicator（left-join 侧表 net_margin）；本地权威，不缓存。",
 )
 
 # latest_trade_date：最新交易日（编排/就绪度）。避免客户端拉全表取 MAX。

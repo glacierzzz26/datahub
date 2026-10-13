@@ -87,6 +87,22 @@ class FinancialIndicator(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class FinancialIndicatorExt(Base):
+    """财务扩展（datahub **自有**，非 steady 镜像）：net_margin 等 research 侧补口。
+
+    steady 镜像表 financial_indicator 无 net_margin 列；为不破逐字 parity，另立侧表，
+    由 `db` provider 的 `_financial_indicator` left-join 出 net_margin。
+    """
+
+    __tablename__ = "financial_indicator_ext"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    code = Column(String(10), nullable=False)
+    report_date = Column(Date, nullable=False)  # 报告期
+    net_margin = Column(Numeric(10, 4))  # 销售净利率（%）
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class DailyValuation(Base):
     """每日估值（PE(TTM)/PE(静)/PB/市值）"""
 
