@@ -70,6 +70,9 @@ def test_orm_tables_are_exactly_raw_subset():
     assert set(_orm_tables()) == {
         "stock_basic", "daily_price", "financial_indicator", "financial_indicator_ext",
         "daily_valuation", "trade_calendar", "market_hotspot", "task_run",
+        "capital_flow", "capital_flow_detail", "industry_index",
+        "industry_sw_info", "industry_sw_cons", "macro",
+        "news_by_stock", "announcement_by_stock",
     }
 
 
