@@ -9,7 +9,7 @@
 复用 `app.db.get_session`（进程级单例池）——与采集侧共享同一 `app.db` 模块。
 """
 import logging
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import and_, func, or_
@@ -17,10 +17,18 @@ from sqlalchemy.orm import Session
 
 from app import db
 from app.models.tables import (
+    AnnouncementByStock,
+    CapitalFlow,
+    CapitalFlowDetail,
     DailyPrice,
     DailyValuation,
     FinancialIndicator,
     FinancialIndicatorExt,
+    IndustryIndex,
+    IndustrySwCons,
+    IndustrySwInfo,
+    Macro,
+    NewsByStock,
     StockBasic,
     TradeCalendar,
 )
@@ -159,10 +167,12 @@ def _project(rows, fields: list[str], all_cols: tuple[str, ...]) -> list[dict]:
     return out
 
 
-def _apply_last(q, model, order_by, last: int):
-    """每 code 最近 N 行：内层 `ROW_NUMBER() OVER (PARTITION BY code ORDER BY <order_by>)`，
-    外层 join 回取 `rn <= last`。把「每码最新一条 / top-2 / 21 根窗」变成有界批量。"""
-    rn = func.row_number().over(partition_by=model.code, order_by=order_by).label("rn")
+def _apply_last(q, model, order_by, last: int, partition_by=None):
+    """每 <partition_by> 最近 N 行：内层 `ROW_NUMBER() OVER (PARTITION BY <col>
+    ORDER BY <order_by>)`，外层 join 回取 `rn <= last`。把「每码最新一条 / top-2 / 21 根窗」
+    变成有界批量。`partition_by` 默认 `model.code`；`macro` 等无 code 列的表显式传。"""
+    part = partition_by if partition_by is not None else model.code
+    rn = func.row_number().over(partition_by=part, order_by=order_by).label("rn")
     sub = q.with_entities(model.id, rn).subquery()
     return q.join(sub, model.id == sub.c.id).filter(sub.c.rn <= last)
 
@@ -328,6 +338,188 @@ def _dup_keys(session: Session, params: dict) -> list[dict]:
     return [{"key": "|".join(str(v) for v in r[:-1]), "n": r[-1]} for r in rows]
 
 
+# ---------- P14-1 研报数值域（datahub 自有表）----------
+#
+# 通用：codes 逗号 IN、start/end 区间、date 精确单日、asof 上界、last 每 code 最近 N 行、
+# fields 列投影（保持声明序）。全部重复上文既有函数的口径，无新单位约定。
+
+_CAPITAL_FLOW_COLS = ("code", "trade_date", "name", "close", "pct_change",
+                      "turnover_rate", "reasons")
+_CAPITAL_FLOW_DETAIL_COLS = ("code", "trade_date", "dealer_name", "buy_amount",
+                             "buy_pct", "sell_amount", "sell_pct", "net_amount",
+                             "reason")
+_INDUSTRY_INDEX_COLS = ("code", "trade_date", "open", "high", "low", "close",
+                        "pct_change", "amplitude", "chg_amount")
+_INDUSTRY_SW_INFO_COLS = ("code", "level", "name", "level_label", "parent_name",
+                          "member_count", "pe_static", "pe_ttm", "pb",
+                          "dividend_yield")
+_INDUSTRY_SW_CONS_COLS = ("index_code", "stock_code", "stock_name", "market_cap",
+                          "pe_ttm", "pb", "roe", "dividend_yield",
+                          "net_profit_growth", "revenue_growth")
+_MACRO_COLS = ("indicator", "period_label", "period_end", "cadence", "level",
+               "yoy", "mom")
+# news 不暴露 content_hash（去重键，内部用）
+_NEWS_COLS = ("code", "title", "content", "published_at", "source", "url")
+_ANNOUNCEMENT_COLS = ("code", "title", "category", "publish_date", "url")
+
+
+def _capital_flow(session: Session, params: dict) -> list[dict]:
+    """龙虎榜记录：codes IN、start/end 区间、last 每码最近 N、fields 投影。"""
+    q = session.query(CapitalFlow)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(CapitalFlow.code.in_(codes))
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(CapitalFlow.trade_date >= start)
+    if end is not None:
+        q = q.filter(CapitalFlow.trade_date <= end)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, CapitalFlow, [CapitalFlow.trade_date.desc()], last)
+    q = q.order_by(CapitalFlow.code, CapitalFlow.trade_date)
+    return _project(q.all(), _split_csv(params.get("fields")), _CAPITAL_FLOW_COLS)
+
+
+def _capital_flow_detail(session: Session, params: dict) -> list[dict]:
+    """龙虎榜明细：codes IN、date 精确或 start/end 区间、fields 投影。"""
+    q = session.query(CapitalFlowDetail)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(CapitalFlowDetail.code.in_(codes))
+    exact = _as_date(params.get("date"))
+    if exact is not None:
+        q = q.filter(CapitalFlowDetail.trade_date == exact)
+    else:
+        start = _as_date(params.get("start"))
+        end = _as_date(params.get("end"))
+        if start is not None:
+            q = q.filter(CapitalFlowDetail.trade_date >= start)
+        if end is not None:
+            q = q.filter(CapitalFlowDetail.trade_date <= end)
+    q = q.order_by(CapitalFlowDetail.code, CapitalFlowDetail.trade_date,
+                   CapitalFlowDetail.sell_amount.desc().nulls_last())
+    return _project(q.all(), _split_csv(params.get("fields")),
+                    _CAPITAL_FLOW_DETAIL_COLS)
+
+
+def _industry_index(session: Session, params: dict) -> list[dict]:
+    """申万行业指数日线：codes IN、start/end 区间、asof 上界、last、fields。升序。"""
+    q = session.query(IndustryIndex)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(IndustryIndex.code.in_(codes))
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(IndustryIndex.trade_date >= start)
+    if end is not None:
+        q = q.filter(IndustryIndex.trade_date <= end)
+    asof = _as_date(params.get("asof"))
+    if asof is not None:
+        q = q.filter(IndustryIndex.trade_date <= asof)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, IndustryIndex, [IndustryIndex.trade_date.desc()], last)
+    q = q.order_by(IndustryIndex.code, IndustryIndex.trade_date)
+    return _project(q.all(), _split_csv(params.get("fields")), _INDUSTRY_INDEX_COLS)
+
+
+def _industry_sw_info(session: Session, params: dict) -> list[dict]:
+    """申万行业分类信息：levels IN、codes IN、parent 精确、fields 投影。"""
+    q = session.query(IndustrySwInfo)
+    levels = [int(x) for x in _split_csv(params.get("levels")) if x.isdigit()]
+    if levels:
+        q = q.filter(IndustrySwInfo.level.in_(levels))
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(IndustrySwInfo.code.in_(codes))
+    if params.get("parent"):
+        q = q.filter(IndustrySwInfo.parent_name == params["parent"])
+    q = q.order_by(IndustrySwInfo.level, IndustrySwInfo.code)
+    return _project(q.all(), _split_csv(params.get("fields")),
+                    _INDUSTRY_SW_INFO_COLS)
+
+
+def _industry_sw_cons(session: Session, params: dict) -> list[dict]:
+    """申万三级成分股：index_codes IN、codes（成分股）IN、fields 投影。市值降序。"""
+    q = session.query(IndustrySwCons)
+    index_codes = _split_csv(params.get("index_codes"))
+    if index_codes:
+        q = q.filter(IndustrySwCons.index_code.in_(index_codes))
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(IndustrySwCons.stock_code.in_(codes))
+    q = q.order_by(IndustrySwCons.index_code,
+                   IndustrySwCons.market_cap.desc().nulls_last())
+    return _project(q.all(), _split_csv(params.get("fields")),
+                    _INDUSTRY_SW_CONS_COLS)
+
+
+def _macro(session: Session, params: dict) -> list[dict]:
+    """宏观指标序列：indicator（逗号 IN）、period_end 区间、last 每指标最近 N、fields。"""
+    q = session.query(Macro)
+    indicators = _split_csv(params.get("indicator"))
+    if indicators:
+        q = q.filter(Macro.indicator.in_(indicators))
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(Macro.period_end >= start)
+    if end is not None:
+        q = q.filter(Macro.period_end <= end)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, Macro, [Macro.period_end.desc()], last,
+                        partition_by=Macro.indicator)
+    q = q.order_by(Macro.indicator, Macro.period_end)
+    return _project(q.all(), _split_csv(params.get("fields")), _MACRO_COLS)
+
+
+def _news_by_stock(session: Session, params: dict) -> list[dict]:
+    """个股新闻：codes IN、start/end（published_at 区间，end 含当日）、last、fields。
+    content_hash 为内部去重键，不返回。"""
+    q = session.query(NewsByStock)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(NewsByStock.code.in_(codes))
+    start = _as_date(params.get("start"))
+    if start is not None:
+        q = q.filter(NewsByStock.published_at >= start)
+    end = _as_date(params.get("end"))
+    if end is not None:
+        # end 含当日全天：published_at < 次日零点
+        q = q.filter(NewsByStock.published_at < end + timedelta(days=1))
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, NewsByStock, [NewsByStock.published_at.desc()], last)
+    q = q.order_by(NewsByStock.code, NewsByStock.published_at.desc())
+    return _project(q.all(), _split_csv(params.get("fields")), _NEWS_COLS)
+
+
+def _announcement_by_stock(session: Session, params: dict) -> list[dict]:
+    """个股公告：codes IN、start/end（publish_date 区间）、last、fields。"""
+    q = session.query(AnnouncementByStock)
+    codes = _split_csv(params.get("codes"))
+    if codes:
+        q = q.filter(AnnouncementByStock.code.in_(codes))
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(AnnouncementByStock.publish_date >= start)
+    if end is not None:
+        q = q.filter(AnnouncementByStock.publish_date <= end)
+    last = _as_int(params.get("last"))
+    if last:
+        q = _apply_last(q, AnnouncementByStock,
+                        [AnnouncementByStock.publish_date.desc()], last)
+    q = q.order_by(AnnouncementByStock.code,
+                   AnnouncementByStock.publish_date.desc())
+    return _project(q.all(), _split_csv(params.get("fields")),
+                    _ANNOUNCEMENT_COLS)
+
+
 # dataset id → 查询函数（新增 raw 数据集在此登记）
 _FETCHERS = {
     "trade_calendar": _trade_calendar,
@@ -339,6 +531,14 @@ _FETCHERS = {
     "daily_price_days": _daily_price_days,
     "market_ready": _market_ready,
     "dup_keys": _dup_keys,
+    "capital_flow": _capital_flow,
+    "capital_flow_detail": _capital_flow_detail,
+    "industry_index": _industry_index,
+    "industry_sw_info": _industry_sw_info,
+    "industry_sw_cons": _industry_sw_cons,
+    "macro": _macro,
+    "news_by_stock": _news_by_stock,
+    "announcement_by_stock": _announcement_by_stock,
 }
 
 

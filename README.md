@@ -16,6 +16,12 @@
   本仓增补：`latest_trade_date` 加 `before` 参数（严格 `<`）、新增小数据集 `daily_price_days`
   （区间内有行情的交易日 DISTINCT 列表），供 qe `data_quality` 的 prev 推导 / `_check_missing_days`
   脱离本地冻结副本。
+- **P14-1 研报数值域（进行中，2026-10-13 起，≡ phase13 P13-1）**：为 PIKS `research/`
+  从 akshare 切到 datahub 补数据底座——`financial_indicator` 补 `net_margin`（自有侧表
+  `financial_indicator_ext` left-join）+ **8 张自有表**（`capital_flow`/`capital_flow_detail`/
+  `industry_index`/`industry_sw_info`/`industry_sw_cons`/`macro`/`news_by_stock`/
+  `announcement_by_stock`）及其 raw 数据集（采集器见后续 PR）。设计
+  `PIKS docs/phase14/design/datahub-collection.md`（✅ v1.0）。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -65,6 +71,24 @@
 | `daily_price_days` | raw | `start`,`end`(区间), `exclude_index`(bool,默认 true) | trade_date(有行情的交易日，DISTINCT 升序) | 不缓存 |
 | `market_ready` | raw | `date`, `threshold`(默认 0.9), `universe`(默认 hs300,zz500) | ready, covered, total | 不缓存 |
 | `dup_keys` | raw | `table`(daily_price/daily_valuation/financial_indicator) | key, n | 不缓存 |
+
+### P14-1 研报数值域（raw · datahub 自有表）
+
+> 供 PIKS `research/` 从 akshare 切到 datahub（≡ phase13 P13-1）。列**照 research 现用
+> akshare 输出冻结**；各表**不设** FK 到 `stock_basic`（覆盖全 A 含 BJ/池外码）。
+> 列/单位详见各 `DatasetSpec` 与 `deploy/postgres/init.sql` §7。
+
+| id | kind | 参数 | 列 | TTL |
+|---|---|---|---|---|
+| `capital_flow` | raw | `codes`, `start`,`end`, `last`, `fields` | code, trade_date, name, close, pct_change(%), turnover_rate(%), reasons | 不缓存 |
+| `capital_flow_detail` | raw | `codes`, `start`,`end`, `date`(精确), `fields` | code, trade_date, dealer_name, buy_amount, buy_pct, sell_amount, sell_pct, net_amount, reason | 不缓存 |
+| `industry_index` | raw | `codes`, `start`,`end`, `asof`, `last`, `fields` | code, trade_date, open, high, low, close, pct_change, amplitude, chg_amount（**不存量价**） | 不缓存 |
+| `industry_sw_info` | raw | `levels`(1/2/3), `codes`, `parent`, `fields` | code, level, name, level_label, parent_name, member_count, pe_static, pe_ttm, pb, dividend_yield | 不缓存 |
+| `industry_sw_cons` | raw | `index_codes`, `codes`, `fields` | index_code, stock_code, stock_name, market_cap(亿), pe_ttm, pb, roe, dividend_yield, net_profit_growth, revenue_growth | 不缓存 |
+| `macro` | raw | `indicator`(逗号), `start`,`end`, `last`, `fields` | indicator, period_label, period_end, cadence, level, yoy, mom | 不缓存 |
+| `news_by_stock` | raw | `codes`, `start`,`end`, `last`, `fields` | code, title, content, published_at, source, url（**不外发** content_hash） | 不缓存 |
+| `announcement_by_stock` | raw | `codes`, `start`,`end`, `last`, `fields` | code, title, category, publish_date, url | 不缓存 |
+
 
 - **`last` 参数**（每 code 最近 N 行，服务端 `ROW_NUMBER`）是为**有界批量**设计：把消费面的
   窗口/聚合读点（每码最新一条 / top-2 / 21 根窗 / LAG）变成一次往返、无 N+1，无需为每个聚合造专用端点。
@@ -159,7 +183,9 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   - **steady 镜像表**（`stock_basic` / `daily_price` / `daily_valuation` / `financial_indicator` /
     `trade_calendar` / `market_hotspot` / `task_run`）：列/类型/主键/唯一键/索引**逐字对齐 steady**，
     由 `tests/test_schema_parity.py` 对 `tests/fixtures/steady_raw_schema.sql`（vendor 冻结副本）断言。
-  - **datahub 自有表**（当前 `financial_indicator_ext`）：datahub 专属、steady **无**此表，
+  - **datahub 自有表**（`financial_indicator_ext` + P14-1 研报数值域 8 张：`capital_flow`/
+    `capital_flow_detail`/`industry_index`/`industry_sw_info`/`industry_sw_cons`/`macro`/
+    `news_by_stock`/`announcement_by_stock`）：datahub 专属、steady **无**此表，
     **不进** vendor fixture，故 parity 测试对列比对**不覆盖**它（仅由 `tests/test_orm_matches_ddl.py`
     断言 ORM↔DDL 自洽）。`financial_indicator` 数据集读时按 `(code, report_date)` **left-join** 本表
     取 `net_margin`（未采集时 null）。

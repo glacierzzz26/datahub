@@ -27,9 +27,18 @@ STEADY_MIRRORED_TABLES = {
 }
 
 # datahub **自有**原始表（非 steady 镜像，无冻结副本可比）：逐字 parity 不适用，
-# 仅要求与 ORM 对齐（见 test_orm_matches_ddl.py）。承载 research 侧补口（如 net_margin）。
+# 仅要求与 ORM 对齐（见 test_orm_matches_ddl.py）。承载 research 侧补口（如 net_margin）
+# 与 P14-1 研报数值域（龙虎榜/申万/宏观/新闻/公告）。
 DATAHUB_OWNED_TABLES = {
     "financial_indicator_ext",
+    "capital_flow",
+    "capital_flow_detail",
+    "industry_index",
+    "industry_sw_info",
+    "industry_sw_cons",
+    "macro",
+    "news_by_stock",
+    "announcement_by_stock",
 }
 
 # 兼容旧名：datahub 自有库承载的全部原始表（不含 factor_*/strategy_*/account*/… 计算表）

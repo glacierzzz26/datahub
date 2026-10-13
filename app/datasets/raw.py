@@ -252,6 +252,229 @@ DUP_KEYS = DatasetSpec(
     desc="读自有库重复唯一键组（UNIQUE 索引下恒空）；本地权威，不缓存。",
 )
 
+# ---------- P14-1 研报数值域（datahub 自有表）----------
+# research/src/providers/* 现直调 akshare 的 8 个数据域；列照其现用输出冻结。
+# 通用参数风格与上文一致：codes 逗号 IN、start/end 区间、date 精确、last 每码最近 N、fields 投影。
+
+# 公共参数片段（复用，避免 8 处逐字重复）
+_FIELDS = ParamSpec(name="fields", type="str", desc="列投影白名单，逗号；空=全列")
+_CODES = ParamSpec(name="codes", type="str", desc="代码白名单，逗号 IN；空=不限")
+
+# capital_flow：龙虎榜记录（每 code 每日一行）。
+CAPITAL_FLOW = DatasetSpec(
+    id="capital_flow",
+    title="龙虎榜记录",
+    kind="raw",
+    params=(
+        _CODES,
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="last", type="int", desc="每 code 取最近 N 行；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("trade_date", "date"),
+        ColumnSpec("name", "str", desc="名称"),
+        ColumnSpec("close", "float", desc="收盘价（元）"),
+        ColumnSpec("pct_change", "float", desc="涨跌幅（%），东财口径"),
+        ColumnSpec("turnover_rate", "float", desc="换手率（%）"),
+        ColumnSpec("reasons", "str", desc="上榜原因，多因以「；」连接"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 capital_flow（龙虎榜记录）；本地权威，不缓存。",
+)
+
+# capital_flow_detail：龙虎榜明细（营业部级）。
+CAPITAL_FLOW_DETAIL = DatasetSpec(
+    id="capital_flow_detail",
+    title="龙虎榜明细",
+    kind="raw",
+    params=(
+        _CODES,
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="date", type="date", desc="精确单日（给定时优先于 start/end）"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("trade_date", "date"),
+        ColumnSpec("dealer_name", "str", desc="交易营业部名称"),
+        ColumnSpec("buy_amount", "float", desc="买入金额（元）"),
+        ColumnSpec("buy_pct", "float", desc="买入金额-占总成交比例"),
+        ColumnSpec("sell_amount", "float", desc="卖出金额（元）"),
+        ColumnSpec("sell_pct", "float", desc="卖出金额-占总成交比例"),
+        ColumnSpec("net_amount", "float", desc="净额（元）"),
+        ColumnSpec("reason", "str", desc="类型（买入/卖出…）"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 capital_flow_detail（龙虎榜营业部明细）；本地权威，不缓存。",
+)
+
+# industry_index：申万行业指数日线（不存量价——SW 量纲与 A 股不兼容）。
+INDUSTRY_INDEX = DatasetSpec(
+    id="industry_index",
+    title="申万行业指数日线",
+    kind="raw",
+    params=(
+        _CODES,
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="asof", type="date", desc="trade_date ≤ asof（取数锚）"),
+        ParamSpec(name="last", type="int", desc="每 code 取最近 N 行；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str", desc="申万行业指数代码（如 801010）"),
+        ColumnSpec("trade_date", "date"),
+        ColumnSpec("open", "float"),
+        ColumnSpec("high", "float"),
+        ColumnSpec("low", "float"),
+        ColumnSpec("close", "float"),
+        ColumnSpec("pct_change", "float", desc="涨跌幅（%）"),
+        ColumnSpec("amplitude", "float", desc="振幅（%）"),
+        ColumnSpec("chg_amount", "float", desc="涨跌额"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 industry_index（申万行业指数日线）；本地权威，不缓存。",
+)
+
+# industry_sw_info：申万行业分类信息（一/二/三级）。
+INDUSTRY_SW_INFO = DatasetSpec(
+    id="industry_sw_info",
+    title="申万行业分类信息",
+    kind="raw",
+    params=(
+        ParamSpec(name="levels", type="str", desc="级别白名单，逗号（1/2/3）；空=不限"),
+        ParamSpec(name="codes", type="str", desc="行业代码白名单，逗号 IN；空=不限"),
+        ParamSpec(name="parent", type="str", desc="上级行业名称精确匹配"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str", desc="行业代码（如 801010）"),
+        ColumnSpec("level", "int", desc="级别：1/2/3"),
+        ColumnSpec("name", "str", desc="行业名称"),
+        ColumnSpec("level_label", "str", desc="一级/二级/三级"),
+        ColumnSpec("parent_name", "str", desc="上级行业"),
+        ColumnSpec("member_count", "int", desc="成份个数"),
+        ColumnSpec("pe_static", "float", desc="静态市盈率"),
+        ColumnSpec("pe_ttm", "float", desc="TTM(滚动)市盈率"),
+        ColumnSpec("pb", "float", desc="市净率"),
+        ColumnSpec("dividend_yield", "float", desc="静态股息率"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 industry_sw_info（申万行业分类信息）；本地权威，不缓存。",
+)
+
+# industry_sw_cons：申万三级成分股。
+INDUSTRY_SW_CONS = DatasetSpec(
+    id="industry_sw_cons",
+    title="申万三级成分股",
+    kind="raw",
+    params=(
+        ParamSpec(name="index_codes", type="str",
+                  desc="申万三级行业代码白名单，逗号 IN；空=不限"),
+        ParamSpec(name="codes", type="str", desc="成分股代码白名单，逗号 IN；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("index_code", "str", desc="申万三级行业代码"),
+        ColumnSpec("stock_code", "str", desc="成分股代码"),
+        ColumnSpec("stock_name", "str", desc="成分股名称"),
+        ColumnSpec("market_cap", "float", desc="市值（亿元）"),
+        ColumnSpec("pe_ttm", "float", desc="市盈率 TTM"),
+        ColumnSpec("pb", "float", desc="市净率"),
+        ColumnSpec("roe", "float", desc="ROE（%）"),
+        ColumnSpec("dividend_yield", "float", desc="股息率（%）"),
+        ColumnSpec("net_profit_growth", "float", desc="净利润增速（%）"),
+        ColumnSpec("revenue_growth", "float", desc="营收增速（%）"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 industry_sw_cons（申万三级成分股）；本地权威，不缓存。",
+)
+
+# macro：宏观指标序列（CPI/PPI/M2/GDP）。
+MACRO = DatasetSpec(
+    id="macro",
+    title="宏观指标序列",
+    kind="raw",
+    params=(
+        ParamSpec(name="indicator", type="str",
+                  desc="指标白名单，逗号（cn_cpi/cn_ppi/cn_m2/cn_gdp）；空=不限"),
+        ParamSpec(name="start", type="date", desc="起始期 period_end ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止期 period_end ≤（含）"),
+        ParamSpec(name="last", type="int", desc="每 indicator 取最近 N 行；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("indicator", "str", desc="指标键：cn_cpi/cn_ppi/cn_m2/cn_gdp"),
+        ColumnSpec("period_label", "str", desc="统计期原文（如 2026年08月份）"),
+        ColumnSpec("period_end", "date", desc="统计期末"),
+        ColumnSpec("cadence", "str", desc="频率：month/quarter"),
+        ColumnSpec("level", "float", desc="指标值（指数/绝对量；口径见 research）"),
+        ColumnSpec("yoy", "float", desc="同比（%）"),
+        ColumnSpec("mom", "float", desc="环比（%）；源无则 null"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 macro（宏观指标序列）；本地权威，不缓存。",
+)
+
+# news_by_stock：个股新闻（content_hash 去重键不外发）。
+NEWS_BY_STOCK = DatasetSpec(
+    id="news_by_stock",
+    title="个股新闻",
+    kind="raw",
+    params=(
+        _CODES,
+        ParamSpec(name="start", type="date", desc="起始 published_at ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止 published_at ≤（含当日）"),
+        ParamSpec(name="last", type="int", desc="每 code 取最近 N 行；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("title", "str", desc="新闻标题"),
+        ColumnSpec("content", "str", desc="新闻内容"),
+        ColumnSpec("published_at", "str", desc="发布时间（ISO 字符串）"),
+        ColumnSpec("source", "str", desc="文章来源"),
+        ColumnSpec("url", "str", desc="新闻链接"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 news_by_stock（个股新闻）；本地权威，不缓存。",
+)
+
+# announcement_by_stock：个股公告（标题级）。
+ANNOUNCEMENT_BY_STOCK = DatasetSpec(
+    id="announcement_by_stock",
+    title="个股公告",
+    kind="raw",
+    params=(
+        _CODES,
+        ParamSpec(name="start", type="date", desc="起始 publish_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止 publish_date ≤（含）"),
+        ParamSpec(name="last", type="int", desc="每 code 取最近 N 行；空=不限"),
+        _FIELDS,
+    ),
+    columns=(
+        ColumnSpec("code", "str"),
+        ColumnSpec("title", "str", desc="公告标题"),
+        ColumnSpec("category", "str", desc="公告类型"),
+        ColumnSpec("publish_date", "date", desc="公告日期"),
+        ColumnSpec("url", "str", desc="网址"),
+    ),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 announcement_by_stock（个股公告）；本地权威，不缓存。",
+)
+
 RAW_DATASETS: tuple[DatasetSpec, ...] = (
     TRADE_CALENDAR,
     STOCK_BASIC,
@@ -262,4 +485,12 @@ RAW_DATASETS: tuple[DatasetSpec, ...] = (
     DAILY_PRICE_DAYS,
     MARKET_READY,
     DUP_KEYS,
+    CAPITAL_FLOW,
+    CAPITAL_FLOW_DETAIL,
+    INDUSTRY_INDEX,
+    INDUSTRY_SW_INFO,
+    INDUSTRY_SW_CONS,
+    MACRO,
+    NEWS_BY_STOCK,
+    ANNOUNCEMENT_BY_STOCK,
 )
