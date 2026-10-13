@@ -181,15 +181,17 @@ from app.models.tables import (  # noqa: E402
     DailyPrice,
     DailyValuation,
     FinancialIndicator,
+    FinancialIndicatorExt,
 )
 
 
 @pytest.fixture
 def price_session(monkeypatch):
-    """内存 SQLite 建三张价格/财务真表，真跑过滤/窗口/投影。"""
+    """内存 SQLite 建价格/财务真表 + 财务侧表，真跑过滤/窗口/投影。"""
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
                            poolclass=StaticPool)
-    for m in (StockBasic, DailyPrice, DailyValuation, FinancialIndicator):
+    for m in (StockBasic, DailyPrice, DailyValuation, FinancialIndicator,
+              FinancialIndicatorExt):
         m.__table__.create(engine)
     factory = sessionmaker(bind=engine)
     s = factory()
@@ -217,6 +219,9 @@ def price_session(monkeypatch):
                            announce_date=date(2025, 10, 20), roe=9.0),
         FinancialIndicator(id=2, code="600000", report_date=date(2025, 12, 31),
                            announce_date=date(2026, 1, 25), roe=9.5),
+        # 财务侧表：仅 2025-12-31 期有 net_margin；2025-09-30 期无（验证 left-join NULL）
+        FinancialIndicatorExt(id=1, code="600000", report_date=date(2025, 12, 31),
+                              net_margin=12.34),
     ])
     s.commit()
     s.close()
@@ -321,6 +326,19 @@ def test_financial_as_of_guards_future(price_session):
 def test_financial_last_window_announce_desc(price_session):
     rows = db_provider.fetch("financial_indicator", {"codes": "600000", "last": 1})
     assert len(rows) == 1 and rows[0]["report_date"] == date(2025, 12, 31)
+
+
+def test_financial_net_margin_left_join(price_session):
+    # 侧表 financial_indicator_ext 有 12-31 期 → net_margin 带出；09-30 期无 → NULL
+    rows = db_provider.fetch("financial_indicator", {"codes": "600000"})
+    by_report = {r["report_date"]: r["net_margin"] for r in rows}
+    assert by_report[date(2025, 12, 31)] == 12.34
+    assert by_report[date(2025, 9, 30)] is None
+    # 投影含 net_margin，且数值是 float（非 Decimal→字符串）
+    assert "net_margin" in rows[0]
+    proj = db_provider.fetch("financial_indicator",
+                             {"codes": "600000", "fields": "net_margin,roe"})
+    assert set(proj[0]) == {"net_margin", "roe"}
 
 
 def test_latest_trade_date_excludes_index_by_default(price_session):

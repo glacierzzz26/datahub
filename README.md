@@ -60,7 +60,7 @@
 | `stock_basic` | raw | `codes`,`market`,`universe`,`scope`(逗号 IN), `industry`, `keyword`(模糊), `sort`(code/name/list_date/market/industry), `order`(asc/desc), `limit`,`offset` | code, name, market, industry, list_date, status, universe, data_scope | 不缓存 |
 | `daily_price` | raw | `codes`(逗号 IN，**含指数** sh000300), `start`,`end`,`date`(精确), `asof`(≤), `last`(每码最近 N), `fields`(列投影), `adj_not_null` | code, trade_date, open, high, low, close, volume, amount, adj_factor, turnover_rate | 不缓存 |
 | `daily_valuation` | raw | `codes`, `start`,`end`, `asof`, `last`, `fields` | code, trade_date, close, total_mv, float_mv, pe_ttm, pe_static, pb | 不缓存 |
-| `financial_indicator` | raw | `codes`, `as_of`(announce_date≤，防未来函数), `last`, `fields` | code, report_date, announce_date, pe, pb, roe, profit_growth, revenue_growth, debt_ratio, gross_margin | 不缓存 |
+| `financial_indicator` | raw | `codes`, `as_of`(announce_date≤，防未来函数), `last`, `fields` | code, report_date, announce_date, pe, pb, roe, profit_growth, revenue_growth, debt_ratio, gross_margin, net_margin（**datahub 侧表** left-join，未采集时 null） | 不缓存 |
 | `latest_trade_date` | raw | `table`(daily_price/daily_valuation), `exclude_index`(bool,默认 true), `before`(trade_date < 严格小于) | trade_date | 不缓存 |
 | `daily_price_days` | raw | `start`,`end`(区间), `exclude_index`(bool,默认 true) | trade_date(有行情的交易日，DISTINCT 升序) | 不缓存 |
 | `market_ready` | raw | `date`, `threshold`(默认 0.9), `universe`(默认 hs300,zz500) | ready, covered, total | 不缓存 |
@@ -155,10 +155,16 @@ DATAHUB_COLLECT_DATASETS=          # 数据集白名单（逗号）：stock_basi
 Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立库 `datahub`**，承载原始采集表。
 本轮仅落地**建库地基**（采集栈与 raw 出口在后续 PR）。
 
-- **schema 真源**：`deploy/postgres/init.sql`（**仅原始表**：`stock_basic` / `daily_price` /
-  `daily_valuation` / `financial_indicator` / `trade_calendar` / `market_hotspot` / `task_run`）。
-  列/类型/主键/唯一键/索引**逐字对齐 steady**，由 `tests/test_schema_parity.py` 对
-  `tests/fixtures/steady_raw_schema.sql`（vendor 冻结副本）断言。
+- **schema 真源**：`deploy/postgres/init.sql`，含**两类表**：
+  - **steady 镜像表**（`stock_basic` / `daily_price` / `daily_valuation` / `financial_indicator` /
+    `trade_calendar` / `market_hotspot` / `task_run`）：列/类型/主键/唯一键/索引**逐字对齐 steady**，
+    由 `tests/test_schema_parity.py` 对 `tests/fixtures/steady_raw_schema.sql`（vendor 冻结副本）断言。
+  - **datahub 自有表**（当前 `financial_indicator_ext`）：datahub 专属、steady **无**此表，
+    **不进** vendor fixture，故 parity 测试对列比对**不覆盖**它（仅由 `tests/test_orm_matches_ddl.py`
+    断言 ORM↔DDL 自洽）。`financial_indicator` 数据集读时按 `(code, report_date)` **left-join** 本表
+    取 `net_margin`（未采集时 null）。
+  - 两类的划分由 `tests/test_schema_parity.py` 的 `STEADY_MIRRORED_TABLES` / `DATAHUB_OWNED_TABLES` 承载；
+    `init.sql` 表集须 == 二者**并集**。
 - **建库**（一次性，幂等）：`./scripts/init-db.sh`——在 `quant-postgres` 容器上
   `CREATE DATABASE datahub` + 施加 `init.sql`。
 - **迁移**（幂等）：`./scripts/migrate.sh` 应用 `deploy/migrations/*.sql`（`schema_migrations` 台账）；
@@ -192,9 +198,11 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
   > ⚠️ **为何用容器名而非 `host.docker.internal`**：生产 PG 仅监听 `127.0.0.1:5432`（loopback），
   > 容器经 `host-gateway`(172.17.0.1) 连会被拒（实测 `Connection refused`）。加入 PG 网络更稳
   > （PG 重建自动回网）；网络名由 steady 固定项目名 `-p steady-20260821-c8d0651` 决定，跨发布稳定。
-- ⚠️ **维护约定**：steady 原始表 schema 变更时，须**手工 re-vendor**
+- ⚠️ **维护约定**：steady 镜像表 schema 变更时，须**手工 re-vendor**
   `tests/fixtures/steady_raw_schema.sql`（逐字拷贝 + 更新头注 commit）+ 在 datahub 补一条
   `deploy/migrations/NNN_*.sql`，二者与 parity 测试在同一 PR 内改。
+  **datahub 自有表**变更则**不动** fixture：改 `init.sql` + 补迁移 + 改 `tables.py`，
+  由 `tests/test_orm_matches_ddl.py` 守 ORM↔DDL（如 `financial_indicator_ext`）。
 
 ---
 
@@ -260,7 +268,7 @@ app/
 ├── mcp_facade.py      # FastMCP 实例 + 由注册表生成 tools
 ├── server.py          # 入口：装配 FastAPI + 挂载 MCP + /healthz
 ├── datasets/          # spec / registry / external（Phase 1）/ raw（Phase 2 读库）
-├── models/            # ORM（tables.py，仅原始表子集；对齐 init.sql）
+├── models/            # ORM（tables.py，原始表子集 + datahub 自有侧表；对齐 init.sql）
 ├── providers/         # base（with_timeout）/ net / registry / ext（取数）/ db（读库）
 ├── tasks.py           # [Phase 2] 采集调度入口（python -m app.tasks）+ 采集闸门（注册层/调用层）
 ├── watchdog.py        # [Phase 2] 任务级看门狗（卡死自愈 + 补跑）
@@ -270,7 +278,7 @@ app/
 └── sources/           # [Phase 2] 数据源适配（baostock / tencent）
 
 deploy/
-├── postgres/init.sql  # 原始表 schema（仅采集表；逐字对齐 steady）
+├── postgres/init.sql  # 表 schema（steady 镜像表逐字对齐 + datahub 自有表）
 └── migrations/        # 幂等迁移（schema_migrations 台账）
 scripts/
 ├── init-db.sh         # 一次性建库（CREATE DATABASE + 施加 init.sql）

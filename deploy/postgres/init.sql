@@ -83,6 +83,22 @@ CREATE INDEX IF NOT EXISTS idx_financial_code_announce
     ON financial_indicator (code, announce_date);
 
 -- ------------------------------------------------------------
+-- 3.2 财务扩展（datahub 自有，**非** steady 镜像）：research 数值域补口
+--     net_margin（销售净利率）等 —— steady 镜像表 financial_indicator 无此列，
+--     为不破 steady 逐字 parity，另立 datahub 自有侧表，读时 left-join 出 net_margin。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS financial_indicator_ext (
+    id          BIGSERIAL     PRIMARY KEY,
+    code        VARCHAR(10)   NOT NULL REFERENCES stock_basic (code),
+    report_date DATE          NOT NULL,   -- 报告期（对齐 financial_indicator.report_date）
+    net_margin  DECIMAL(10,4),            -- 销售净利率（%）
+    created_at  TIMESTAMP     DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_ext_code_report
+    ON financial_indicator_ext (code, report_date);
+
+-- ------------------------------------------------------------
 -- 3.5 每日估值（日度 PE/PB/市值）
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS daily_valuation (

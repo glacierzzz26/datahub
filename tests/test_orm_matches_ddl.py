@@ -68,7 +68,7 @@ def _ddl_tables() -> dict[str, dict[str, str]]:
 def test_orm_tables_are_exactly_raw_subset():
     """ORM 只应含原始表子集（不含 AppConfig / RemediationTask 等 steady 专属表）。"""
     assert set(_orm_tables()) == {
-        "stock_basic", "daily_price", "financial_indicator",
+        "stock_basic", "daily_price", "financial_indicator", "financial_indicator_ext",
         "daily_valuation", "trade_calendar", "market_hotspot", "task_run",
     }
 
