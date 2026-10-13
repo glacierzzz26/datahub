@@ -425,3 +425,23 @@ def test_dup_keys_detects_duplicate(price_session):
     s.close()
     rows = db_provider.fetch("dup_keys", {"table": "daily_price"})
     assert rows == [{"key": "600000|2026-01-05", "n": 2}]
+
+
+def test_dup_keys_window_filters_by_key_date(price_session):
+    # 两处重复：01-02 与 01-05；窗口 [01-03, 01-31] 只应命中 01-05（01-02 被 start 排除）
+    s = price_session()
+    s.add_all([
+        DailyPrice(id=99, code="600000", trade_date=date(2026, 1, 5), close=11.0),
+        DailyPrice(id=100, code="600000", trade_date=date(2026, 1, 2), close=10.0),
+    ])
+    s.commit()
+    s.close()
+    assert {r["key"] for r in db_provider.fetch("dup_keys", {"table": "daily_price"})} == \
+        {"600000|2026-01-02", "600000|2026-01-05"}
+    assert db_provider.fetch("dup_keys", {"table": "daily_price",
+                                          "start": "2026-01-03", "end": "2026-01-31"}) == \
+        [{"key": "600000|2026-01-05", "n": 2}]
+    # end 收窄同样生效：≤01-03 只见 01-02 的重复
+    assert db_provider.fetch("dup_keys", {"table": "daily_price",
+                                          "end": "2026-01-03"}) == \
+        [{"key": "600000|2026-01-02", "n": 2}]

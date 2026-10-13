@@ -330,11 +330,23 @@ _DUP_KEYS = {
 
 def _dup_keys(session: Session, params: dict) -> list[dict]:
     """重复唯一键组（>1 条）。datahub 有 UNIQUE 索引 → 恒空；作为「零重复」断言。
-    对齐 qe `data_quality._check_duplicates`（价格/估值用 trade_date，财务用 report_date）。"""
+    对齐 qe `data_quality._check_duplicates`（价格/估值用 trade_date，财务用 report_date）。
+
+    `start`/`end` 收窄**键日期**（价格/估值为 trade_date，财务为 report_date）：
+    全表 `GROUP BY`（daily_price 10.26M / daily_valuation 9.28M 行）需 ~10–55s，会超
+    消费方（qe）10s 读超时 → 质检 job 假失败；qe 只断言「近期零重复」，传近窗即可（秒级）。
+    """
     model, key_cols = _DUP_KEYS.get(params.get("table") or "daily_price",
                                     _DUP_KEYS["daily_price"])
-    rows = (session.query(*key_cols, func.count())
-            .group_by(*key_cols).having(func.count() > 1).all())
+    q = session.query(*key_cols, func.count())
+    date_col = key_cols[1]  # 键日期列：trade_date / report_date
+    start = _as_date(params.get("start"))
+    end = _as_date(params.get("end"))
+    if start is not None:
+        q = q.filter(date_col >= start)
+    if end is not None:
+        q = q.filter(date_col <= end)
+    rows = q.group_by(*key_cols).having(func.count() > 1).all()
     return [{"key": "|".join(str(v) for v in r[:-1]), "n": r[-1]} for r in rows]
 
 
