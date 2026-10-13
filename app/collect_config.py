@@ -171,6 +171,14 @@ TENCENT_DEFER_MAX = _int("TENCENT_DEFER_MAX", 300)
 HOTSPOT_TOP_N = _int("COLLECTOR_HOTSPOT_TOP_N", 10)          # 板块/人气榜取 TOP N
 HOTSPOT_INDICES = _str("COLLECTOR_HOTSPOT_INDICES", ".DJI,.IXIC,.INX")  # 隔夜外盘代码
 
+# 龙虎榜回看窗口（天）：每日采集 [today−N, today] 的龙虎榜记录与营业部明细
+# （P14-1 研报数值域；东财区间接口一次取全市场，upsert 幂等）。
+LHB_DAYS = _int("COLLECTOR_LHB_DAYS", 30)
+
+# 研报数值域「逐码/逐对」采集的请求间隔（秒）：成分股/行业指数/龙虎榜明细/新闻/公告
+# 逐只请求，避免触发 akshare/东财限速（与 DAILY_SYNC_INTERVAL 同义，独立旋钮便于调）。
+RESEARCH_SYNC_INTERVAL = _float("COLLECTOR_RESEARCH_INTERVAL", 0.5)
+
 
 def index_code_list() -> list[str]:
     return [c.strip() for c in INDEX_CODES.split(",") if c.strip()]

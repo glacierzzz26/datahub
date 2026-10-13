@@ -45,6 +45,15 @@ _JOB_DATASET = {
     "job_sync_valuation": "valuation",
     "job_sync_finance": "finance",
     "job_nightly_backfill": "daily",
+    # P14-1 研报数值域（8 张 datahub 自有表；采集器见 app/collectors/research.py）
+    "job_sync_macro": "macro",
+    "job_sync_industry_sw_info": "industry_sw_info",
+    "job_sync_industry_sw_cons": "industry_sw_cons",
+    "job_sync_industry_index": "industry_index",
+    "job_sync_capital_flow": "capital_flow",
+    "job_sync_capital_flow_detail": "capital_flow_detail",
+    "job_sync_news": "news_by_stock",
+    "job_sync_announcement": "announcement_by_stock",
 }
 
 
@@ -390,6 +399,96 @@ def job_nightly_backfill():
     BackfillJob(db).valuation()
 
 
+# ---------- P14-1 研报数值域 job（8 张 datahub 自有表；采集器见 collectors/research.py）----------
+# 依赖顺序（cron 上 sw_info 先于 sw_cons/index；capital_flow 先于 detail）——
+# 快照表 industry_sw_info 是 cons/index 的行业码来源，capital_flow 是 detail 的 (code, 日) 来源。
+
+@collect_gated("macro")
+@guarded
+def job_sync_macro():
+    """宏观指标全史刷新（CPI/PPI/M2/GDP；每指标一次调用，小数据量）"""
+    from app.collectors.research import MacroCollector
+
+    MacroCollector(get_session()).run()
+
+
+@collect_gated("industry_sw_info")
+@guarded
+def job_sync_industry_sw_info():
+    """申万行业分类当期快照（一/二/三级）——须先于 sw_cons/index 采（提供行业码）"""
+    from app.collectors.research import IndustrySwInfoCollector
+
+    IndustrySwInfoCollector(get_session()).run()
+
+
+@collect_gated("industry_sw_cons")
+@guarded
+def job_sync_industry_sw_cons():
+    """申万三级成分股快照（依赖 industry_sw_info 提供三级行业码）"""
+    from app.collectors.research import IndustrySwConsCollector
+
+    IndustrySwConsCollector(get_session()).run()
+
+
+@collect_gated("industry_index")
+@guarded
+def job_sync_industry_index():
+    """申万行业指数日线全史（依赖 industry_sw_info 提供行业码）"""
+    from app.collectors.research import IndustryIndexCollector
+
+    IndustryIndexCollector(get_session()).run()
+
+
+@collect_gated("capital_flow")
+@guarded
+def job_sync_capital_flow():
+    """龙虎榜记录：回看 COLLECTOR_LHB_DAYS 天（东财区间接口一次取全市场）"""
+    from app.collect_config import LHB_DAYS
+    from app.collectors.research import CapitalFlowCollector
+
+    end = date.today()
+    start = end - timedelta(days=LHB_DAYS)
+    CapitalFlowCollector(get_session()).run(start, end)
+
+
+@collect_gated("capital_flow_detail")
+@guarded
+def job_sync_capital_flow_detail():
+    """龙虎榜营业部明细（依赖 capital_flow 记录已采：pairs 取自记录表）"""
+    from app.collect_config import LHB_DAYS
+    from app.collectors.research import CapitalFlowDetailCollector
+
+    end = date.today()
+    start = end - timedelta(days=LHB_DAYS)
+    CapitalFlowDetailCollector(get_session()).run(start=start, end=end)
+
+
+@collect_gated("news_by_stock")
+@guarded
+def job_sync_news():
+    """个股新闻：采集范围内逐只（东财 stock_news_em）"""
+    from app.collectors.research import NewsByStockCollector
+    from app.collectors.scope import collect_codes
+
+    db = get_session()
+    codes = collect_codes(db)
+    logger.info("个股新闻同步：%s 只", len(codes))
+    NewsByStockCollector(db).run(codes)
+
+
+@collect_gated("announcement_by_stock")
+@guarded
+def job_sync_announcement():
+    """个股公告：采集范围内逐只（东财 stock_individual_notice_report）"""
+    from app.collectors.research import AnnouncementByStockCollector
+    from app.collectors.scope import collect_codes
+
+    db = get_session()
+    codes = collect_codes(db)
+    logger.info("个股公告同步：%s 只", len(codes))
+    AnnouncementByStockCollector(db).run(codes)
+
+
 def register_catchups() -> None:
     """注册启动补跑探针（Issue #14）：重启后 APScheduler 不会重跑已过去的 cron
     触发点，由 watchdog.startup_catchup 按探针判定并主动补跑，否则进程活着缺口仍在。
@@ -409,6 +508,15 @@ def register_catchups() -> None:
         "job_sync_calendar": _never_catchup,
         "job_sync_finance": _never_catchup,
         "job_nightly_backfill": _never_catchup,
+        # P14-1 研报数值域：均幂等（区间/快照 upsert），有自身周期，不参与补跑
+        "job_sync_macro": _never_catchup,
+        "job_sync_industry_sw_info": _never_catchup,
+        "job_sync_industry_sw_cons": _never_catchup,
+        "job_sync_industry_index": _never_catchup,
+        "job_sync_capital_flow": _never_catchup,
+        "job_sync_capital_flow_detail": _never_catchup,
+        "job_sync_news": _never_catchup,
+        "job_sync_announcement": _never_catchup,
     }
     for _j, _probe in _probes.items():
         if collect_enabled(_JOB_DATASET[_j]):
@@ -416,6 +524,8 @@ def register_catchups() -> None:
 
 
 # (job 函数, cron 时, 分) —— 与 watchdog.JOB_SCHEDULE 对齐（当日数据统一 18:00+ BaoStock 产出）。
+# P14-1 研报数值域排在核心行情之后（18:20+），且内部有依赖顺序：
+# sw_info → sw_cons/index（行业码来源）、capital_flow → capital_flow_detail（(code,日) 来源）。
 _JOB_SPECS = [
     (job_sync_stock_list, 9, 0),
     (job_sync_calendar, 9, 5),
@@ -424,6 +534,15 @@ _JOB_SPECS = [
     (job_sync_daily_price, 18, 10),
     (job_sync_index, 18, 15),
     (job_sync_valuation, 18, 15),
+    # P14-1 研报数值域
+    (job_sync_macro, 18, 20),
+    (job_sync_industry_sw_info, 18, 20),
+    (job_sync_industry_sw_cons, 18, 25),
+    (job_sync_industry_index, 18, 30),
+    (job_sync_capital_flow, 18, 35),
+    (job_sync_capital_flow_detail, 18, 40),
+    (job_sync_news, 19, 0),
+    (job_sync_announcement, 19, 5),
 ]
 # max_instances=1 + coalesce=True：任务超时（如扩池后回填/同步变长）时**不并发重入**，
 # 堆积的触发折叠成一次（Issue #13 R16）。原实现无此约束 → interval 5min 的自愈若跑超

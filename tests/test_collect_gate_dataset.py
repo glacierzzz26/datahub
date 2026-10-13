@@ -65,3 +65,36 @@ def test_calendar_job_runs_when_enabled(monkeypatch):
     monkeypatch.setattr(tasks, "get_session",
                         lambda: (_ for _ in ()).throw(AssertionError("daily 不应访问 DB")))
     assert tasks.job_sync_daily_price() is None
+
+
+def test_register_jobs_only_capital_flow(monkeypatch):
+    """放闸 P14-1 单个数据集 → 只注册其对应 job（其余（含核心域）不注册）。"""
+    _enable(monkeypatch, ["capital_flow"])
+    sched = _FakeScheduler()
+    assert tasks.register_jobs(sched) == ["job_sync_capital_flow"]
+    assert sched.jobs == ["job_sync_capital_flow"]
+
+
+def test_capital_flow_job_runs_when_enabled(monkeypatch):
+    """放闸后 job_sync_capital_flow 真的调用 CapitalFlowCollector；detail 未放闸即返回。"""
+    _enable(monkeypatch, ["capital_flow"])
+    import app.collectors.research as res_mod
+
+    calls = []
+
+    class _FakeCapitalFlow:
+        def __init__(self, db):
+            self.db = db
+
+        def run(self, start, end):
+            calls.append((start, end))
+
+    monkeypatch.setattr(res_mod, "CapitalFlowCollector", _FakeCapitalFlow)
+    monkeypatch.setattr(tasks, "get_session", lambda: object())
+
+    assert tasks.job_sync_capital_flow() is None
+    assert len(calls) == 1
+    # detail 未放闸 → 立即返回（不碰 DB）
+    monkeypatch.setattr(tasks, "get_session",
+                        lambda: (_ for _ in ()).throw(AssertionError("detail 不应访问 DB")))
+    assert tasks.job_sync_capital_flow_detail() is None

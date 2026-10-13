@@ -20,8 +20,8 @@
   从 akshare 切到 datahub 补数据底座——`financial_indicator` 补 `net_margin`（自有侧表
   `financial_indicator_ext` left-join）+ **8 张自有表**（`capital_flow`/`capital_flow_detail`/
   `industry_index`/`industry_sw_info`/`industry_sw_cons`/`macro`/`news_by_stock`/
-  `announcement_by_stock`）及其 raw 数据集（采集器见后续 PR）。设计
-  `PIKS docs/phase14/design/datahub-collection.md`（✅ v1.0）。
+  `announcement_by_stock`）及其 raw 数据集 + **采集器**（`app/collectors/research.py`，
+  见「采集子系统」）。设计 `PIKS docs/phase14/design/datahub-collection.md`（✅ v1.0）。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
@@ -161,12 +161,34 @@ ASGI；② 看门狗 `os._exit(1)` 依赖 `restart` 拉起，同进程会连 API
 ```
 DATAHUB_COLLECT_ENABLED=           # 总开关
 DATAHUB_COLLECT_DATASETS=          # 数据集白名单（逗号）：stock_basic/calendar/index/daily/valuation/finance
+                                   # + P14-1：macro/industry_sw_info/industry_sw_cons/industry_index/
+                                   #   capital_flow/capital_flow_detail/news_by_stock/announcement_by_stock
 ```
 
 **两层闸门**（任一关即不采集）：① 注册层——`register_jobs` 只为已放闸的数据集
 `add_job`（全关 ⇒ `scheduler.get_jobs()==[]`）；② 调用层——`@collect_gated(dataset)`，
 挡住 `watchdog.startup_catchup` 与手工 `cli` 绕过注册层的直调。全关时**不**启动看门狗/
 补跑（连 `trade_calendar` 查询都不发生）。翻闸 = 改 `.env` + 重启容器。
+
+### 定时表（`python -m app.tasks`；与 `watchdog.JOB_SCHEDULE` 对齐）
+
+| 时刻 | job | 数据集 | 说明 |
+|---|---|---|---|
+| 09:00 / 09:05 | stock_list / calendar | `stock_basic` / `calendar` | 股票列表 + 交易日历 |
+| 18:00 / 18:05 | finance / nightly_backfill | `finance` / `daily` | 财务 + 缺口回填 |
+| 18:10 / 18:15 | daily_price / index·valuation | `daily` / `index`·`valuation` | 当日行情 / 指数·估值 |
+| 18:20 | macro · industry_sw_info | `macro`·`industry_sw_info` | 宏观全史 / 申万分类快照 |
+| 18:25 | industry_sw_cons | `industry_sw_cons` | 申万三级成分（依赖 sw_info 的行业码） |
+| 18:30 | industry_index | `industry_index` | 申万指数日线（依赖 sw_info） |
+| 18:35 / 18:40 | capital_flow / _detail | `capital_flow`/`capital_flow_detail` | 龙虎榜记录 → 营业部明细 |
+| 19:00 / 19:05 | news / announcement | `news_by_stock`/`announcement_by_stock` | 个股新闻 / 公告（逐只） |
+
+> P14-1 研报数值域采集器见 `app/collectors/research.py`；其探针均 `_never_catchup`
+> （幂等刷新，不参与启动补跑）。`macro` 内嵌**最小** `indicator→(level,yoy,mom)` 抽取
+> 映射，`unit/level_label/caliber` 等语义表留 PIKS（R2）；CPI/PPI 的 `level` 是**指数
+> （上年同月=100）非百分比**，原样落库、量纲说明在消费侧。逐码采集按
+> `COLLECTOR_RESEARCH_INTERVAL`（默认 0.5s）限速；龙虎榜回看窗 `COLLECTOR_LHB_DAYS`
+> （默认 30 天）。
 
 > ⚠️ **告警链过渡期断链（已知缺口）**：搬来的看门狗把 failed 行写 **datahub 库**，而
 > quant-engine 的 `notify_scheduler` 读 **steady 库** → 过渡期采集失败不再推飞书。信号
@@ -299,7 +321,8 @@ app/
 ├── tasks.py           # [Phase 2] 采集调度入口（python -m app.tasks）+ 采集闸门（注册层/调用层）
 ├── watchdog.py        # [Phase 2] 任务级看门狗（卡死自愈 + 补跑）
 ├── cli.py             # [Phase 2] 采集手动入口（python -m app.cli，受采集闸门约束）
-├── collectors/        # [Phase 2] 原始采集器（daily/valuation/finance/index/calendar/stock/backfill）
+├── collectors/        # 原始采集器：核心（daily/valuation/finance/index/calendar/stock/backfill）
+│                      #            + P14-1 研报数值域（research.py：macro/sw/index/lhb/news/announcement）
 ├── cleaners/          # [Phase 2] 清洗 + 复权因子守卫（factor_guard）
 └── sources/           # [Phase 2] 数据源适配（baostock / tencent）
 

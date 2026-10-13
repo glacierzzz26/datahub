@@ -11,6 +11,15 @@
     python -m app.cli backfill [--start 20160801] [--end 20260819] [--quarters 20]
                                 [--codes 600519,000001] [--dry-run]
     python -m app.cli backfill-valuation [--codes 600519,000001] [--dry-run]
+    # P14-1 研报数值域（8 张 datahub 自有表）
+    python -m app.cli sync-macro
+    python -m app.cli sync-industry-sw-info
+    python -m app.cli sync-industry-sw-cons [--codes 801010,...]
+    python -m app.cli sync-industry-index [--codes 801010,...] [--start D] [--end D]
+    python -m app.cli sync-capital-flow [--start 2026-09-01] [--end 2026-09-30]
+    python -m app.cli sync-capital-flow-detail [--start 2026-09-01] [--end 2026-09-30]
+    python -m app.cli sync-news [--codes 600519,...]
+    python -m app.cli sync-announcement [--codes 600519,...]
 """
 import argparse
 import logging
@@ -34,6 +43,15 @@ _CMD_DATASET = {
     "sync-valuation": "valuation",
     "backfill": "daily",
     "backfill-valuation": "valuation",
+    # P14-1 研报数值域（8 张 datahub 自有表）
+    "sync-macro": "macro",
+    "sync-industry-sw-info": "industry_sw_info",
+    "sync-industry-sw-cons": "industry_sw_cons",
+    "sync-industry-index": "industry_index",
+    "sync-capital-flow": "capital_flow",
+    "sync-capital-flow-detail": "capital_flow_detail",
+    "sync-news": "news_by_stock",
+    "sync-announcement": "announcement_by_stock",
 }
 
 
@@ -123,6 +141,87 @@ def cmd_backfill_valuation(args):
     codes = [c.strip().zfill(6) for c in args.codes.split(",")] if args.codes else None
     job.valuation(codes)
     return True
+
+
+def _codes_arg(args):
+    """--codes 逗号列表（zfill 6）→ list；未给返回 None（由各采集器取采集范围）"""
+    if getattr(args, "codes", None):
+        return [c.strip().zfill(6) for c in args.codes.split(",") if c.strip()]
+    return None
+
+
+def _lhb_window(args):
+    """龙虎榜回看窗口：--start/--end 覆盖，缺省 [today−LHB_DAYS, today]"""
+    from app.collect_config import LHB_DAYS
+
+    end = date.fromisoformat(args.end) if getattr(args, "end", None) else date.today()
+    start = (date.fromisoformat(args.start) if getattr(args, "start", None)
+             else end - timedelta(days=LHB_DAYS))
+    return start, end
+
+
+def cmd_sync_macro(args):
+    from app.collectors.research import MacroCollector
+    from app.db import get_session
+
+    return MacroCollector(get_session()).run()
+
+
+def cmd_sync_industry_sw_info(args):
+    from app.collectors.research import IndustrySwInfoCollector
+    from app.db import get_session
+
+    return IndustrySwInfoCollector(get_session()).run()
+
+
+def cmd_sync_industry_sw_cons(args):
+    from app.collectors.research import IndustrySwConsCollector
+    from app.db import get_session
+
+    return IndustrySwConsCollector(get_session()).run(_codes_arg(args))
+
+
+def cmd_sync_industry_index(args):
+    from app.collectors.research import IndustryIndexCollector
+    from app.db import get_session
+
+    start = date.fromisoformat(args.start) if args.start else None
+    end = date.fromisoformat(args.end) if args.end else None
+    return IndustryIndexCollector(get_session()).run(_codes_arg(args), start, end)
+
+
+def cmd_sync_capital_flow(args):
+    from app.collectors.research import CapitalFlowCollector
+    from app.db import get_session
+
+    start, end = _lhb_window(args)
+    return CapitalFlowCollector(get_session()).run(start, end)
+
+
+def cmd_sync_capital_flow_detail(args):
+    from app.collectors.research import CapitalFlowDetailCollector
+    from app.db import get_session
+
+    start, end = _lhb_window(args)
+    return CapitalFlowDetailCollector(get_session()).run(start=start, end=end)
+
+
+def cmd_sync_news(args):
+    from app.collectors.research import NewsByStockCollector
+    from app.collectors.scope import collect_codes
+    from app.db import get_session
+
+    db = get_session()
+    return NewsByStockCollector(db).run(_codes_arg(args) or collect_codes(db))
+
+
+def cmd_sync_announcement(args):
+    from app.collectors.research import AnnouncementByStockCollector
+    from app.collectors.scope import collect_codes
+    from app.db import get_session
+
+    db = get_session()
+    return AnnouncementByStockCollector(db).run(_codes_arg(args) or collect_codes(db))
 
 
 def cmd_audit_tencent(args):
@@ -223,6 +322,26 @@ def main():
     p_bv.add_argument("--codes", help="只回填指定代码（逗号分隔）")
     p_bv.add_argument("--dry-run", action="store_true")
 
+    # P14-1 研报数值域（8 张 datahub 自有表）
+    sub.add_parser("sync-macro", help="宏观指标全史（CPI/PPI/M2/GDP）")
+    sub.add_parser("sync-industry-sw-info", help="申万行业分类当期快照（一/二/三级）")
+    p_swc = sub.add_parser("sync-industry-sw-cons", help="申万三级成分股快照")
+    p_swc.add_argument("--codes", help="只同步指定三级行业码（逗号分隔）")
+    p_swi = sub.add_parser("sync-industry-index", help="申万行业指数日线")
+    p_swi.add_argument("--codes", help="只同步指定行业码（逗号分隔）")
+    p_swi.add_argument("--start", help="起始日期 YYYY-MM-DD")
+    p_swi.add_argument("--end", help="结束日期 YYYY-MM-DD")
+    p_cf = sub.add_parser("sync-capital-flow", help="龙虎榜记录（默认近 N 天）")
+    p_cf.add_argument("--start", help="起始日期 YYYY-MM-DD")
+    p_cf.add_argument("--end", help="结束日期 YYYY-MM-DD")
+    p_cfd = sub.add_parser("sync-capital-flow-detail", help="龙虎榜营业部明细")
+    p_cfd.add_argument("--start", help="起始日期 YYYY-MM-DD")
+    p_cfd.add_argument("--end", help="结束日期 YYYY-MM-DD")
+    p_news = sub.add_parser("sync-news", help="个股新闻")
+    p_news.add_argument("--codes", help="只同步指定代码（逗号分隔）")
+    p_ann = sub.add_parser("sync-announcement", help="个股公告")
+    p_ann.add_argument("--codes", help="只同步指定代码（逗号分隔）")
+
     p_audit = sub.add_parser("audit-tencent",
                              help="只读对账：腾讯 vs 库内 close/volume/amount")
     p_audit.add_argument("--codes", help="指定代码（逗号分隔）")
@@ -264,6 +383,22 @@ def main():
             ok = cmd_sync_valuation(args)
         elif args.cmd == "backfill-valuation":
             ok = cmd_backfill_valuation(args)
+        elif args.cmd == "sync-macro":
+            ok = cmd_sync_macro(args)
+        elif args.cmd == "sync-industry-sw-info":
+            ok = cmd_sync_industry_sw_info(args)
+        elif args.cmd == "sync-industry-sw-cons":
+            ok = cmd_sync_industry_sw_cons(args)
+        elif args.cmd == "sync-industry-index":
+            ok = cmd_sync_industry_index(args)
+        elif args.cmd == "sync-capital-flow":
+            ok = cmd_sync_capital_flow(args)
+        elif args.cmd == "sync-capital-flow-detail":
+            ok = cmd_sync_capital_flow_detail(args)
+        elif args.cmd == "sync-news":
+            ok = cmd_sync_news(args)
+        elif args.cmd == "sync-announcement":
+            ok = cmd_sync_announcement(args)
         elif args.cmd == "audit-tencent":
             ok = cmd_audit_tencent(args)
         else:
