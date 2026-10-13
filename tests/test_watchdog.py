@@ -410,7 +410,10 @@ def test_register_catchups_wires_real_probes(monkeypatch):
     assert set(watchdog._catchup_probes) == {
         "job_sync_daily_price", "job_sync_valuation", "job_sync_index",
         "job_sync_stock_list", "job_sync_calendar", "job_sync_finance",
-        "job_nightly_backfill"}
+        "job_nightly_backfill",
+        "job_sync_macro", "job_sync_industry_sw_info", "job_sync_industry_sw_cons",
+        "job_sync_industry_index", "job_sync_capital_flow",
+        "job_sync_capital_flow_detail", "job_sync_news", "job_sync_announcement"}
     assert watchdog._catchup_probes["job_sync_stock_list"](0) is True  # _never_catchup
     # 注册了探针却没排进 JOB_SCHEDULE → 永远轮不到补跑（静默失效），必须钉住
     assert set(watchdog._catchup_probes) <= set(watchdog.JOB_SCHEDULE)

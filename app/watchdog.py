@@ -42,6 +42,16 @@ JOB_LIMITS = {
     "job_nightly_backfill": 14400,
     "job_sync_daily_price": 10800,
     "job_sync_valuation": 10800,
+    # P14-1 研报数值域（默认 pool 800 只；翻 a_share 前须重新标定）。逐码采集按
+    # RESEARCH_SYNC_INTERVAL 限速，800 只 ≈ 数百秒 + 请求时间，故放宽到 7200。
+    "job_sync_macro": 3600,
+    "job_sync_industry_sw_info": 1800,
+    "job_sync_industry_sw_cons": 7200,
+    "job_sync_industry_index": 7200,
+    "job_sync_capital_flow": 1800,
+    "job_sync_capital_flow_detail": 7200,
+    "job_sync_news": 7200,
+    "job_sync_announcement": 7200,
 }
 DEFAULT_LIMIT = 3600
 # 各 job 的今日计划时刻 (时, 分) —— 与 tasks.py 的 add_job 保持一致，供启动补跑判定时间窗。
@@ -54,6 +64,15 @@ JOB_SCHEDULE = {
     "job_sync_daily_price": (18, 10),
     "job_sync_index": (18, 15),
     "job_sync_valuation": (18, 15),
+    # P14-1 研报数值域（探针均 _never_catchup：幂等刷新，不自动补跑）
+    "job_sync_macro": (18, 20),
+    "job_sync_industry_sw_info": (18, 20),
+    "job_sync_industry_sw_cons": (18, 25),
+    "job_sync_industry_index": (18, 30),
+    "job_sync_capital_flow": (18, 35),
+    "job_sync_capital_flow_detail": (18, 40),
+    "job_sync_news": (19, 0),
+    "job_sync_announcement": (19, 5),
 }
 # 退出计数（挂载卷 → 跨容器重启留存）：防 `restart: unless-stopped` 无退避的抖动环路
 EXIT_THRESHOLD_FILE = os.getenv("COLLECTOR_WATCHDOG_EXIT_FILE", "/app/logs/.watchdog_exits")

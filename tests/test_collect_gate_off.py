@@ -8,7 +8,10 @@
 from app import collect_config as cc
 from app import tasks, watchdog
 
-DATASETS = ["stock_basic", "calendar", "index", "daily", "valuation", "finance"]
+DATASETS = ["stock_basic", "calendar", "index", "daily", "valuation", "finance",
+            "macro", "industry_sw_info", "industry_sw_cons", "industry_index",
+            "capital_flow", "capital_flow_detail", "news_by_stock",
+            "announcement_by_stock"]
 
 
 class _FakeScheduler:
@@ -57,7 +60,11 @@ def test_jobs_noop_and_no_db_when_off(monkeypatch):
     monkeypatch.setattr(tasks, "get_session", _boom)
     for job in (tasks.job_sync_stock_list, tasks.job_sync_calendar, tasks.job_sync_index,
                 tasks.job_sync_daily_price, tasks.job_sync_valuation,
-                tasks.job_sync_finance, tasks.job_nightly_backfill):
+                tasks.job_sync_finance, tasks.job_nightly_backfill,
+                tasks.job_sync_macro, tasks.job_sync_industry_sw_info,
+                tasks.job_sync_industry_sw_cons, tasks.job_sync_industry_index,
+                tasks.job_sync_capital_flow, tasks.job_sync_capital_flow_detail,
+                tasks.job_sync_news, tasks.job_sync_announcement):
         assert job() is None, f"{job.__name__} 闸门关却未立即返回"
 
 
