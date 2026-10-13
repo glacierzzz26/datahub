@@ -70,7 +70,7 @@
 | `latest_trade_date` | raw | `table`(daily_price/daily_valuation), `exclude_index`(bool,默认 true), `before`(trade_date < 严格小于) | trade_date | 不缓存 |
 | `daily_price_days` | raw | `start`,`end`(区间), `exclude_index`(bool,默认 true) | trade_date(有行情的交易日，DISTINCT 升序) | 不缓存 |
 | `market_ready` | raw | `date`, `threshold`(默认 0.9), `universe`(默认 hs300,zz500) | ready, covered, total | 不缓存 |
-| `dup_keys` | raw | `table`(daily_price/daily_valuation/financial_indicator) | key, n | 不缓存 |
+| `dup_keys` | raw | `table`(daily_price/daily_valuation/financial_indicator), `start`,`end`(键日期窗口，可空) | key, n | 不缓存 |
 
 ### P14-1 研报数值域（raw · datahub 自有表）
 

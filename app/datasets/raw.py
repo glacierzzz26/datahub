@@ -9,6 +9,8 @@ Phase 3 增补：`daily_price`（**含指数行**，无独立 index 表）、`da
 Phase 4 增补：`latest_trade_date` 加 `before` 参数（严格 `<`，取「低于该日的最近交易日」），
 新增小数据集 `daily_price_days`（区间内有行情的交易日 DISTINCT 列表，供
 qe `data_quality` 的 prev 推导 / `_check_missing_days` 脱离本地冻结 `daily_price`）。
+Phase 4 修复：`dup_keys` 加 `start`/`end`（键日期窗口）——全表 `GROUP BY` 在 10M 行上需
+~10–55s，超消费方读超时致质检 job 假失败；qe 只断言近窗零重复。
 
 **`last` 参数**（每 code 最近 N 行，服务端 `ROW_NUMBER`）把 backend 的窗口/聚合类读点
 （LAG / 21 根窗 / top-2 / 每码最新一条）变成**有界批量**，一次往返、无 N+1。
@@ -234,6 +236,8 @@ MARKET_READY = DatasetSpec(
 )
 
 # dup_keys：重复键检查（供 data_quality._check_duplicates）。datahub 有 UNIQUE 索引 → 恒空。
+# `start`/`end` 收窄「键日期」窗口：全表 GROUP BY（daily_price 10.26M / daily_valuation 9.28M 行）
+# 需 ~10–55s，会超消费方（qe）10s 读超时 → 质检 job 假失败；qe 只断言「近期零重复」，传近窗即可。
 DUP_KEYS = DatasetSpec(
     id="dup_keys",
     title="重复键检查",
@@ -242,6 +246,10 @@ DUP_KEYS = DatasetSpec(
         ParamSpec(name="table", type="enum",
                   enum=("daily_price", "daily_valuation", "financial_indicator"),
                   default="daily_price", desc="检查哪张表"),
+        ParamSpec(name="start", type="date",
+                  desc="键日期下界（含）：trade_date/report_date ≥；空=不限"),
+        ParamSpec(name="end", type="date",
+                  desc="键日期上界（含）：trade_date/report_date ≤；空=不限"),
     ),
     columns=(
         ColumnSpec("key", "str", desc="重复键（code|trade_date 或 code|report_date）"),
@@ -249,7 +257,7 @@ DUP_KEYS = DatasetSpec(
     ),
     ttl_seconds=None,
     source="db",
-    desc="读自有库重复唯一键组（UNIQUE 索引下恒空）；本地权威，不缓存。",
+    desc="读自有库重复唯一键组（UNIQUE 索引下恒空；可用 start/end 收窄窗口）；本地权威，不缓存。",
 )
 
 # ---------- P14-1 研报数值域（datahub 自有表）----------
