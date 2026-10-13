@@ -5,11 +5,13 @@
 
 - **本阶段（Phase 1）**：一个独立服务、**不建自有库**（按需抓 + 缓存）、
   **steady 零改动**（两条线并行、互不依赖）。
-- **Phase 2（进行中）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
-  （已落地：建库地基 + 采集子系统骨架，**默认全关**）+ raw 出口（`trade_calendar` 已可读）
-  + 逐数据集灰度切换。calendar 灰度切换随后续 PR。
-- **Phase 3（进行中）**：raw 出口逐数据集增补（`stock_basic` 已注册，采集放闸 + 首灌 + 对账
-  后供 steady 读切换），随后 `index/valuation/finance/daily`。
+- **Phase 2（✅ 已完成）**：**建自有库**（复用生产 PG 实例的独立库 `datahub`）+ 搬核心采集栈
+  + raw 出口 + 采集逐数据集灰度切换。**datahub 已接管全部原始采集**。
+- **Phase 3（✅ 已完成，2026-10-13）**：raw 出口逐数据集增补（`trade_calendar`/`stock_basic`/
+  `daily_price`/`daily_valuation`/`financial_indicator` + 3 个专用小数据集）后，steady（qe + backend）
+  **原始数据读取已切到 datahub**、**steady 采集全停** ⇒ datahub 为**唯一采集方**。
+  生产切换记录见 steady 仓 `docs/phase2/stages/datahub-phase3-生产切换runbook.md` §5。
+  遗留：steady 侧 Tier3 读点（`backtest/engine` 等）仍读本地冻结副本（Phase 4 重构）、过渡期告警断链。
 - **上位设计**：steady 仓库 `docs/phase2/design/数据接入层-datahub.md`（总设计）、
   `…-datahub-phase1.md`（本阶段蓝图）、`…-datahub-phase2.md`（建库 + 接管核心采集）。
 
