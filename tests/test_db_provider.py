@@ -343,6 +343,50 @@ def test_latest_trade_date_no_rows_is_empty(monkeypatch):
     assert db_provider.fetch("latest_trade_date", {}) == []
 
 
+def test_latest_trade_date_before_strict(price_session):
+    # 600000 有 01-05；before=01-05（严格 <）→ 01-03（非 01-05）；before=01-03 → 01-02
+    assert db_provider.fetch("latest_trade_date", {"before": "2026-01-05"}) == \
+        [{"trade_date": date(2026, 1, 3)}]
+    assert db_provider.fetch("latest_trade_date", {"before": "2026-01-03"}) == \
+        [{"trade_date": date(2026, 1, 2)}]
+
+
+def test_latest_trade_date_before_with_index(price_session):
+    # 指数行更晚（sh000300 06-30）：exclude_index=false 纳入、true 排除（before 组合）
+    s = price_session()
+    s.add(DailyPrice(id=10, code="sh000300", trade_date=date(2026, 6, 30), close=4100.0))
+    s.commit()
+    s.close()
+    assert db_provider.fetch("latest_trade_date",
+                             {"before": "2026-12-31", "exclude_index": False}) == \
+        [{"trade_date": date(2026, 6, 30)}]
+    assert db_provider.fetch("latest_trade_date",
+                             {"before": "2026-12-31", "exclude_index": True}) == \
+        [{"trade_date": date(2026, 1, 5)}]
+
+
+def test_daily_price_days_distinct_asc(price_session):
+    # 600000 三日 + sh000300 两日；默认排指数、去重、升序
+    rows = db_provider.fetch("daily_price_days",
+                             {"start": "2026-01-01", "end": "2026-01-31"})
+    assert [r["trade_date"] for r in rows] == \
+        [date(2026, 1, 2), date(2026, 1, 3), date(2026, 1, 5)]
+
+
+def test_daily_price_days_include_index_and_window(price_session):
+    # 含指数 + 窗口 [01-03, 01-31] → 01-03,01-05（01-02 被 start 排除）
+    rows = db_provider.fetch("daily_price_days",
+                             {"start": "2026-01-03", "end": "2026-01-31",
+                              "exclude_index": False})
+    assert [r["trade_date"] for r in rows] == \
+        [date(2026, 1, 3), date(2026, 1, 5)]
+
+
+def test_daily_price_days_empty_is_legal(price_session):
+    assert db_provider.fetch("daily_price_days",
+                             {"start": "2030-01-01", "end": "2030-12-31"}) == []
+
+
 def test_market_ready_ratio(price_session):
     # 池 2 只（600000,600519），当日仅 600000 有行情 → covered=1/total=2=0.5 < 0.9
     rows = db_provider.fetch("market_ready", {"date": "2026-01-03", "threshold": "0.9"})

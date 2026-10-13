@@ -6,6 +6,9 @@
 列 `code,name,market,industry,list_date,status,universe,data_scope`）。
 Phase 3 增补：`daily_price`（**含指数行**，无独立 index 表）、`daily_valuation`、
 `financial_indicator`，以及三个**小数据集** `latest_trade_date` / `market_ready` / `dup_keys`。
+Phase 4 增补：`latest_trade_date` 加 `before` 参数（严格 `<`，取「低于该日的最近交易日」），
+新增小数据集 `daily_price_days`（区间内有行情的交易日 DISTINCT 列表，供
+qe `data_quality` 的 prev 推导 / `_check_missing_days` 脱离本地冻结 `daily_price`）。
 
 **`last` 参数**（每 code 最近 N 行，服务端 `ROW_NUMBER`）把 backend 的窗口/聚合类读点
 （LAG / 21 根窗 / top-2 / 每码最新一条）变成**有界批量**，一次往返、无 N+1。
@@ -180,11 +183,30 @@ LATEST_TRADE_DATE = DatasetSpec(
                   desc="取哪个表的最新交易日"),
         ParamSpec(name="exclude_index", type="bool", default=True,
                   desc="是否排除指数行（code NOT LIKE 'sh%'）；默认 true"),
+        ParamSpec(name="before", type="date",
+                  desc="trade_date < before（严格小于；取「低于该日的最近交易日」）"),
     ),
     columns=(ColumnSpec("trade_date", "date"),),
     ttl_seconds=None,
     source="db",
     desc="读自有库最新 trade_date（MAX）；本地权威，不缓存。",
+)
+
+# daily_price_days：区间内「有行情的交易日」去重列表（供 data_quality._check_missing_days）。
+DAILY_PRICE_DAYS = DatasetSpec(
+    id="daily_price_days",
+    title="有行情的交易日",
+    kind="raw",
+    params=(
+        ParamSpec(name="start", type="date", desc="起始日 trade_date ≥（含）"),
+        ParamSpec(name="end", type="date", desc="截止日 trade_date ≤（含）"),
+        ParamSpec(name="exclude_index", type="bool", default=True,
+                  desc="是否排除指数行（code NOT LIKE 'sh%'）；默认 true"),
+    ),
+    columns=(ColumnSpec("trade_date", "date"),),
+    ttl_seconds=None,
+    source="db",
+    desc="读自有库 daily_price 中区间内有行情的交易日（DISTINCT，升序）；本地权威，不缓存。",
 )
 
 # market_ready：采集就绪闸门（池覆盖率 ≥ 阈值）。避免客户端拉 800 行自算。
@@ -235,6 +257,7 @@ RAW_DATASETS: tuple[DatasetSpec, ...] = (
     DAILY_VALUATION,
     FINANCIAL_INDICATOR,
     LATEST_TRADE_DATE,
+    DAILY_PRICE_DAYS,
     MARKET_READY,
     DUP_KEYS,
 )
