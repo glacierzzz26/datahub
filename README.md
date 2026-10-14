@@ -213,6 +213,10 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
     取 `net_margin`（未采集时 null）。
   - 两类的划分由 `tests/test_schema_parity.py` 的 `STEADY_MIRRORED_TABLES` / `DATAHUB_OWNED_TABLES` 承载；
     `init.sql` 表集须 == 二者**并集**。
+  - **例外——镜像表的纯性能索引**：镜像表上只加索引（与数据等价无关）时，可**只经迁移**施加、
+    **不写 `init.sql`**（写进去就得同步改 vendor fixture，而 fixture 是 steady 冻结副本，须 steady
+    也有该索引才诚实）。先例：`deploy/migrations/003_daily_valuation_trade_date_index.sql`
+    （`daily_valuation` 的独立 `trade_date` 索引，消除 `dup_keys`/窗查询的 9.28M 行 seq scan）。
 - **建库**（一次性，幂等）：`./scripts/init-db.sh`——在 `quant-postgres` 容器上
   `CREATE DATABASE datahub` + 施加 `init.sql`。
 - **迁移**（幂等）：`./scripts/migrate.sh` 应用 `deploy/migrations/*.sql`（`schema_migrations` 台账）；
