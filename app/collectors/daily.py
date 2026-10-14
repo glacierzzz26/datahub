@@ -37,6 +37,29 @@ from app.sources import baostock, tencent
 logger = logging.getLogger(__name__)
 
 
+def trailing_refresh_start(max_d: date | None, end: date,
+                           refresh_days: int, fallback_days: int) -> date:
+    """逐码增量起点：补新日期之外**回看 refresh_days 天**以自愈坏行。
+
+    背景：旧式 `start = max_d + 1` 使任何已落库的坏行（源未落定时写入的半日 partial
+    bar）**永不重采** —— 探针判 `max == today` 后连当日也不再拉，坏行永久留存
+    （2026-09-23 全市场半日 bar 事故）。回看尾窗后，坏行在次日被 upsert 覆盖
+    （冲突键 `(code, trade_date)` 全列覆盖）→ 自愈。
+
+      - 库内有历史 (max_d)：`start = min(max_d + 1, end - refresh_days)`
+          · max_d 久远（缺口 > refresh_days）→ `max_d + 1`：只补缺口，不越界重拉
+          · max_d 邻近（缺口 ≤ refresh_days）→ `end - refresh_days`：重采尾窗，覆盖坏行
+      - 无历史 → `end - fallback_days`（首次回填窗口）
+      - `refresh_days <= 0` → 退化为 `max_d + 1`（旧语义：当日已有行则 `start > end` 跳过，
+        见 COLLECTOR_DAILY_REFRESH_DAYS 的当日回滚闸门）
+    """
+    if max_d is None:
+        return end - timedelta(days=fallback_days)
+    if refresh_days <= 0:
+        return max_d + timedelta(days=1)
+    return min(max_d + timedelta(days=1), end - timedelta(days=refresh_days))
+
+
 # AkShare 列名 → 内部字段
 COLUMN_MAP = {
     "日期": "trade_date",

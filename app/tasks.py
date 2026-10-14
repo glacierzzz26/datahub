@@ -211,10 +211,14 @@ def job_sync_calendar():
 @guarded
 def job_sync_index():
     from app.collect_config import index_code_list
+    from app.collectors.calendar import last_settled_trade_date
     from app.collectors.index import IndexCollector
 
+    db = get_session()
+    # 盘中护栏：未收盘不回写「今日」指数（与行情同口径，避免半日 bar）
+    end = last_settled_trade_date(db)
     for symbol in index_code_list():
-        IndexCollector(get_session()).run(symbol=symbol)
+        IndexCollector(db).run(symbol=symbol, end_date=end)
 
 
 def _daily_sync_codes(db) -> list[str]:
@@ -305,13 +309,15 @@ def job_sync_daily_price():
     因子延续 + 除权自动回退），仅回退股逐只补；否则全量逐只（BaoStock 主源，
     失败降级 AkShare，见 DailyCollector 源链）。闸门默认关 = 现状。
     """
-    from app.collect_config import DAILY_SYNC_INTERVAL, tencent_snapshot_enabled
-    from app.collectors.daily import DailyCollector
+    from app.collect_config import DAILY_REFRESH_DAYS, DAILY_SYNC_INTERVAL, tencent_snapshot_enabled
+    from app.collectors.calendar import last_settled_trade_date
+    from app.collectors.daily import DailyCollector, trailing_refresh_start
 
     db = get_session()
     codes = _daily_sync_codes(db)
-    end = date.today()
-    logger.info("每日行情同步：%s 只股票", len(codes))
+    # 盘中护栏：未收盘不回写「今日」（避免半日 partial bar 落库后永不重采）
+    end = last_settled_trade_date(db)
+    logger.info("每日行情同步：%s 只股票（end=%s）", len(codes), end)
     if tencent_snapshot_enabled():
         codes = _snapshot_sync(db, codes, end)
         logger.info("腾讯快照路径：%s 只需逐只补", len(codes))
@@ -320,7 +326,8 @@ def job_sync_daily_price():
         max_d = db.execute(
             select(func.max(DailyPrice.trade_date)).where(DailyPrice.code == code)
         ).scalar()
-        start = max_d + timedelta(days=1) if max_d else end - timedelta(days=DAILY_FALLBACK_DAYS)
+        # 尾窗自愈：除补新日期外回看 DAILY_REFRESH_DAYS 天 → 坏行次日被 upsert 覆盖
+        start = trailing_refresh_start(max_d, end, DAILY_REFRESH_DAYS, DAILY_FALLBACK_DAYS)
         if start > end:
             continue
         if DailyCollector(db).run(code, start, end):

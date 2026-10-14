@@ -1,6 +1,6 @@
 """交易日历采集器：A股节假日多于周末，调度与回测以此为基准"""
 import logging
-from datetime import date
+from datetime import date, datetime, time
 
 import akshare as ak
 
@@ -11,6 +11,43 @@ from app.models.tables import TradeCalendar
 from app.sources import baostock
 
 logger = logging.getLogger(__name__)
+
+# A 股收盘（北京时间）。now >= 此点才认为「今日」的日线已落定、可写。
+MARKET_CLOSE = time(15, 0)
+
+
+def last_settled_trade_date(db, now: datetime | None = None) -> date:
+    """最近一个「已收盘」的交易日（≤ 今日）—— 供日频采集钳制写入 end。
+
+    背景：逐码增量 `start = max_d + 1` 且探针判 `max == today`，故任何一次落库的坏行
+    （典型：源未落定时写入的**半日 partial bar**）**永不重采**、永久错（2026-09-23
+    全市场半日 bar 事故）。本函数把「今日」钳到最近已收盘交易日，盘中（now < 15:00）
+    不回写今日，从源头挡掉今日的半日 bar（与 `daily_valuation` 的「当日未出 → raise」
+    守护同意图）。判据同 `tasks.py` / `watchdog.py` 的 `TradeCalendar.is_open`。
+
+      - today 是交易日且 now >= MARKET_CLOSE → today
+      - 否则 → today 之前最近一个 is_open 交易日
+      - 日历无可用记录（未采/缺失）→ 回退 today（不阻断采集、不引入死循环）
+    """
+    from sqlalchemy import func, select
+
+    now = now or datetime.now()
+    today = now.date()
+    is_open_today = db.execute(
+        select(TradeCalendar.is_open).where(TradeCalendar.cal_date == today)
+    ).scalar()
+    if is_open_today and now.time() >= MARKET_CLOSE:
+        return today
+    prev_open = db.execute(
+        select(func.max(TradeCalendar.cal_date)).where(
+            TradeCalendar.cal_date < today,
+            TradeCalendar.is_open.is_(True),
+        )
+    ).scalar()
+    if prev_open is not None:
+        return prev_open
+    logger.warning("交易日历无 %s 之前的开市记录，last_settled_trade_date 回退 today", today)
+    return today
 
 
 class CalendarCollector(BaseCollector):
