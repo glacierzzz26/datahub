@@ -260,6 +260,9 @@ Phase 2 起 datahub **建自有库**——复用生产 PG 实例里的**独立�
 - `DATAHUB_TOKEN` 未配置时**一律拒绝**（fail-closed，不放行空口令）。
 - token 属密钥：写进 `.env`（`chmod 600`），不进仓库、不进日志明文。
 - `/v1/healthz` 免鉴权；`/v1/datasets*` 与 MCP tool 调用按需收紧（MCP 鉴权面见蓝图 §13.5，Phase 1 先靠网络面 + token）。
+- **跨机暴露**：宿主端口绑定由 `DATAHUB_BIND` 控制（默认 `127.0.0.1`，仅本机）——供他机读时设为
+  LAN IP（如 `192.168.0.201`）或 `0.0.0.0`。REST `/v1/*` 仅校验 Bearer token；MCP 出口另需把该
+  host 加进 `DATAHUB_MCP_ALLOWED_HOSTS`（见上文「出口」）。
 
 ---
 
