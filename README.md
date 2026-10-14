@@ -1,5 +1,9 @@
 # datahub（数据接入层 · Phase 1）
 
+> ⚠️ **本仓库已冻结（FROZEN）**——采集/取数服务已迁至 **invest-data**
+> （`glacierzzz26/invest-data`）。本仓不再接受新开发，仅继续为既有 `steady` / `PIKS`
+> 部署服务，直至其迁移完成；一切新改动（功能/修复/文档）一律去 `invest-data`。
+
 独立采集/取数服务：把外部增强数据（热点 / 行业）统一到一个入口，对外经
 **MCP（Streamable HTTP）+ 原生 HTTP** 双出口提供，带 **Bearer token 鉴权**。
 
