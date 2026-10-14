@@ -31,8 +31,10 @@ services:
       - default
       - pg
     ports:
-      # 拓扑未定前先绑本机（蓝图 §9）；跨机再改绑 LAN IP + 反代 + token
-      - "127.0.0.1:8100:8100"
+      # 绑定地址可配（默认本机回环）。跨机供他机读时设 DATAHUB_BIND=<LAN IP>（如 192.168.0.201）
+      # 或 0.0.0.0；鉴权仍靠 DATAHUB_TOKEN（fail-closed）——REST /v1/* 只校验 Bearer，
+      # MCP 出口另需把该 host 加进 DATAHUB_MCP_ALLOWED_HOSTS。
+      - "${DATAHUB_BIND:-127.0.0.1}:8100:8100"
     restart: unless-stopped
     healthcheck:
       # slim 镜像无 curl：用 python 标准库探活
