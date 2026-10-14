@@ -63,6 +63,13 @@ INDEX_CODES = _str("COLLECTOR_INDEX_CODES", "sh000001,sh000300,sh000905,sz399106
 # 每日增量同步：数据库无历史记录时的回退窗口（天）
 DAILY_FALLBACK_DAYS = _int("COLLECTOR_DAILY_FALLBACK_DAYS", 30)
 
+# 尾窗自愈窗口（天）：每日增量同步在「补新日期」之外，**重采最近 N 日**。
+# 根因背景：逐码增量 start=max_d+1 且探针判 max==today → 任何一次写入的坏行（如源未落定
+# 时写入的半日 partial bar）**永不重采**、永久错。重采尾窗后，坏行在次日被 upsert 覆盖
+# （冲突键 (code, trade_date) 全列覆盖）→ 自愈，与 daily_valuation 的全历史重采语义对齐。
+# 0 = 关闭（退回原 max_d+1 语义，当日回滚闸门）。
+DAILY_REFRESH_DAYS = _int("COLLECTOR_DAILY_REFRESH_DAYS", 5)
+
 # 每日增量同步的股票间间隔（秒，回填用 RATE_LIMIT_SECONDS）
 DAILY_SYNC_INTERVAL = _int("COLLECTOR_DAILY_INTERVAL", 1)
 

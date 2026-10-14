@@ -190,6 +190,18 @@ DATAHUB_COLLECT_DATASETS=          # 数据集白名单（逗号）：stock_basi
 > `COLLECTOR_RESEARCH_INTERVAL`（默认 0.5s）限速；龙虎榜回看窗 `COLLECTOR_LHB_DAYS`
 > （默认 30 天）。
 
+> **日行情完整性：尾窗自愈 + 盘中护栏。** 逐码增量的旧式 `start = max_d + 1` 配探针判
+> `max == today`，使任何一次落库的**坏行永不重采**——最坏情形是源未落定时写入的**半日
+> partial bar**（2026-09-23 全市场事故：量/额≈半、收盘偏 ~0.5%，且次日探针见 `max==today`
+> 即跳过，永久留存）。两道修法（`app/tasks.py::job_sync_daily_price` / `app/cli.py::
+> cmd_sync_daily`）：
+> 1. **尾窗自愈** `COLLECTOR_DAILY_REFRESH_DAYS`（默认 5）：每日在补新日期外回看 N 天重采，
+>    坏行次日被 `(code, trade_date)` 全列 upsert 覆盖。`0` = 关闭（退化为旧语义）。
+> 2. **盘中护栏** `app/collectors/calendar.py::last_settled_trade_date`：未过 15:00 收盘
+>    （或非交易日）不写「今日」，从源头挡掉今日半日 bar。`daily_price` 与 `index` 同口径；
+>    `daily_valuation`/`index` 的 BaoStock 兜底本就有「当日未出 → raise」守护，天然免疫。
+>    存量坏行需**定向回填**（尾窗只覆盖近 N 天，更早的坏窗要 `sync-daily --start/--end`）。
+
 > ⚠️ **告警链过渡期断链（已知缺口）**：搬来的看门狗把 failed 行写 **datahub 库**，而
 > quant-engine 的 `notify_scheduler` 读 **steady 库** → 过渡期采集失败不再推飞书。信号
 > 改看 datahub-collector `/healthz`；datahub 侧告警器为后续项。

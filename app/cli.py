@@ -68,18 +68,29 @@ def _codes_for_daily_sync(db) -> list[str]:
 
 
 def cmd_sync_daily(args):
-    """增量同步日行情：逐只拉取（上次入库日 → 今天，可用 --start/--end 覆盖）"""
+    """增量同步日行情：逐只拉取（上次入库日 → 今天，可用 --start/--end 覆盖）
+
+    默认（无 --start）走**尾窗自愈**：除补新日期外回看 `COLLECTOR_DAILY_REFRESH_DAYS`
+    天重采，覆盖源未落定时写入的半日 partial bar。显式 `--start/--end` 保留原样，
+    供运维按窗口定向修复（如 `--start 2026-08-01 --end 2026-10-13`）。
+    """
     import time
 
     from sqlalchemy import func, select
 
-    from app.collect_config import DAILY_FALLBACK_DAYS, DAILY_SYNC_INTERVAL
-    from app.collectors.daily import DailyCollector
+    from app.collect_config import (
+        DAILY_FALLBACK_DAYS,
+        DAILY_REFRESH_DAYS,
+        DAILY_SYNC_INTERVAL,
+    )
+    from app.collectors.calendar import last_settled_trade_date
+    from app.collectors.daily import DailyCollector, trailing_refresh_start
     from app.db import get_session
     from app.models.tables import DailyPrice
 
     db = get_session()
-    end = date.fromisoformat(args.end) if args.end else date.today()
+    # 默认把「今日」钳到最近已收盘交易日（盘中不写半日 bar）；显式 --end 不改
+    end = date.fromisoformat(args.end) if args.end else last_settled_trade_date(db)
     if args.code:
         codes = [args.code.zfill(6)]
     else:
@@ -94,10 +105,8 @@ def cmd_sync_daily(args):
                 select(func.max(DailyPrice.trade_date))
                 .where(DailyPrice.code == code)
             ).scalar()
-            start = (
-                max_d + timedelta(days=1)
-                if max_d else end - timedelta(days=DAILY_FALLBACK_DAYS)
-            )
+            start = trailing_refresh_start(
+                max_d, end, DAILY_REFRESH_DAYS, DAILY_FALLBACK_DAYS)
         if start > end:
             logger.debug("%s 已是最新，跳过", code)
             continue
